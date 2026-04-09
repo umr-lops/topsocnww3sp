@@ -1,0 +1,5 @@
+directory_s1_osw: '/legacy/project/cersat/public/cache/project/mpc-sentinel1/data/esa/'
+directory_trackfiles: '/legacy/project/cersat/public/cache/project/mpc-sentinel1/data/ifremer/osw-trackfiles'
+directory_ww3spectra_output: '/scale/project/wave/WW3/PROJECT/IRI/IRI_15KM_01/'
+DISTANCE_THRESHOLD_KM: 14
+TIME_THRESHOLD_MINUTES: 30

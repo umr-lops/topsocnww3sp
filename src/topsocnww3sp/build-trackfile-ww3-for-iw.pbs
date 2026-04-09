@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#PBS -l walltime=20:40:00
+#PBS -l mem=700m
+#PBS -N WW3trackIW
+#PBS -m n
+
+echo start
+# inputs
+#$1 str day YYYYMMDD
+myvariable=$(whoami)
+. /appli/anaconda/latest/etc/profile.d/conda.sh
+#conda activate /home/datawork-cersat-public/cache/project/mpc-sentinel1/workspace/mamba/envs/xsar_oct22
+conda activate /home/datawork-cersat-public/project/mpc-sentinel1/workspace/mamba/envs/l1bprocmars23
+echo 'which python?'
+which python
+exe=/home1/datahome/agrouaze/sources/projet_sarwave/ww3spectra-trackfile-iw/build-trackfile-ww3-for-iw.py
+
+python $exe --day $1 --productid B07 --outputdir /home1/scratch/agrouaze/track-iw-ww3
