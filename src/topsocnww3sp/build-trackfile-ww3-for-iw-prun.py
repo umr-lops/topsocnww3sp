@@ -1,12 +1,12 @@
 #!/scale/project/lops-siam-airflow/envs_exploit/micromamba/py27/bin/python
-# coding: utf-8
-"""
-"""
+""" """
+
+import datetime
 import logging
 import subprocess
-import datetime
-from dateutil import rrule
+
 import numpy as np
+from dateutil import rrule
 
 if __name__ == "__main__":
     root = logging.getLogger()
@@ -33,16 +33,16 @@ if __name__ == "__main__":
     prunexe = "/appli/prun/bin/prun"
 
     listing = "/home1/scratch/agrouaze/listing-trackfileww3-IW-filled-on-thefly.txt"
-    start = datetime.datetime(2019,1,1)
-    stop = datetime.datetime(2025,1,1)
+    start = datetime.datetime(2019, 1, 1)
+    stop = datetime.datetime(2025, 1, 1)
     # modify initial listing with 2 more args
     fid = open(listing, "w")
     content = open(listing).readlines()
     taille = len(content)
     # for ll in content:
-    for dd in rrule.rrule(rrule.DAILY,dtstart=start,until=stop):
+    for dd in rrule.rrule(rrule.DAILY, dtstart=start, until=stop):
         # ll2 = ll.replace("\n", "") + " " + args.version + " " + args.outputdir + "\n"
-        ll2 = dd.strftime('%Y%m%d')+'\n'
+        ll2 = dd.strftime("%Y%m%d") + "\n"
         fid.write(ll2)
     fid.close()
     pbs = "/home1/datahome/agrouaze/sources/projet_sarwave/ww3spectra-trackfile-iw/build-trackfile-ww3-for-iw.pbs"

@@ -108,9 +108,18 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 
 [[tool.mypy.overrides]]
-module = "topsocnww3sp.*"
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+module = [
+    "topsocnww3sp.*",
+    "numpy.*",
+    "pandas.*",
+    "xarray.*",
+    "shapely.*",
+    "tqdm.*",
+    "h5netcdf.*"
+]
+ignore_missing_imports = true
 
 
 [tool.ruff]
