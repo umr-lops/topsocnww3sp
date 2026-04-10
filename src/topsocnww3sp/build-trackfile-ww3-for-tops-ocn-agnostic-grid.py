@@ -31,6 +31,10 @@ def get_polygon_subswath(dsosw)->shapely.geometry.polygon.Polygon:
     # use convex hull method from shapely to create polygon with each grid points
     lons = dsosw['oswLon'].squeeze().values.ravel()
     lats = dsosw['oswLat'].squeeze().values.ravel()
+    land_points = dsosw['oswLandFlag'].squeeze().values.ravel()
+    # Filter out land points
+    lons = lons[land_points == 0]
+    lats = lats[land_points == 0]
     # Créer une liste de points (lon, lat)
     points = list(zip(lons, lats))
 
