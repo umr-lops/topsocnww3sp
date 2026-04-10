@@ -55,7 +55,7 @@ def read_osw(group, lst_sar_files_osw, dev=False):
         min_kybinsize = min(min_kybinsize, dsosw["oswKyBinSize"].size)
         # drop tiles over land.
         # dsosw = dsosw.where(dsosw['oswLandFlag']==0,drop=True)
-        # reduce the oswKy vector to [0:-2] sicne it appears that for some IW intraburst tiles the 2 last bins are NaN.
+        # reduce the oswKy vector to [0:-2] since it appears that for some IW intraburst tiles the 2 last bins are NaN.
         # dsosw = dsosw.isel({'oswKyBinSize':slice(0,-2)})
         # dsosw = dsosw.isel({'oswKyBinSize':slice(0,90)}) # with IPF403  cannot reindex or align along dimension 'oswKyBinSize' because of conflicting dimension sizes: {67, 63}
         if (

@@ -1,3 +1,5 @@
+import argparse
+import glob
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -8,7 +10,7 @@ import xarray as xr
 import yaml
 
 # Import functions from your script
-from topsocnww3sp.l2c_processor import find_ww3_file, haversine, process_group
+from topsocnww3sp.l2c_processor import find_ww3_file, haversine, main, process_group
 
 
 @pytest.fixture
@@ -84,8 +86,6 @@ def test_find_ww3_file(mock_config, monkeypatch):
     def mock_glob(pattern, recursive=False):
         return ["/fake/path/ww3/WW3_202201_trck.nc"]
 
-    import glob
-
     monkeypatch.setattr(glob, "glob", mock_glob)
 
     sar_time = datetime(2022, 1, 7, 6, 25)
@@ -120,7 +120,7 @@ def test_process_group_no_temporal_match(dummy_sar_ds, dummy_ww3_ds, mock_config
     with patch(
         "topsocnww3sp.l2c_processor.read_osw", return_value=(dummy_sar_ds, None)
     ):
-        ds_sar, ds_ww3, ds_match = process_group(
+        ds_sar, _, _ = process_group(
             "fake.nc", dummy_ww3_ds, "intraburst", mock_config, sar_start, "1to1"
         )
     assert ds_sar is None
@@ -138,22 +138,20 @@ def test_main_integration(monkeypatch, mock_config, dummy_ww3_ds):
     mock_args.mode = "1to1"
     mock_args.group = "intraburst"
 
-    import argparse
+    # Fix ARG005 by replacing 'self' with '_'
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda _: mock_args)
 
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: mock_args)
+    # Also fix 'x' here if the linter flags it
+    monkeypatch.setattr(yaml, "safe_load", lambda _: mock_config)
 
-    # 2. Mock YAML and open
-    monkeypatch.setattr(yaml, "safe_load", lambda x: mock_config)
     monkeypatch.setattr("builtins.open", MagicMock())
 
     # 3. Mock Xarray and logic
-    monkeypatch.setattr(xr, "open_dataset", lambda *args, **kwargs: dummy_ww3_ds)
+    monkeypatch.setattr(xr, "open_dataset", lambda *_args, **_kwargs: dummy_ww3_ds)
 
     with patch("xarray.Dataset.to_netcdf") as mock_save:
         with patch("topsocnww3sp.l2c_processor.process_group") as mock_proc:
             mock_proc.return_value = (xr.Dataset(), xr.Dataset(), xr.Dataset())
-
-            from topsocnww3sp.l2c_processor import main
 
             main()
 

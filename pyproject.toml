@@ -117,7 +117,10 @@ module = [
     "xarray.*",
     "shapely.*",
     "tqdm.*",
-    "h5netcdf.*"
+    "h5netcdf.*",
+    "cartopy.*",
+    "matplotlib.*",
+    "yaml.*",
 ]
 ignore_missing_imports = true
 

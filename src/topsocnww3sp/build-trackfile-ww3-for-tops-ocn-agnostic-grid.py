@@ -35,10 +35,10 @@ def get_polygon_subswath(dsosw) -> shapely.geometry.polygon.Polygon:
     # Filter out land points
     lons = lons[land_points == 0]
     lats = lats[land_points == 0]
-    # Créer une liste de points (lon, lat)
+    # create a list of points (lon, lat)
     points = list(zip(lons, lats))
 
-    # Créer un MultiPoint et calculer l'enveloppe convexe
+    # create a MultiPoint object from the list of points
     multi_point = MultiPoint(points)
     convex_hull_polygon = multi_point.convex_hull
     return convex_hull_polygon

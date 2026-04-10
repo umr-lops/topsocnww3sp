@@ -51,8 +51,8 @@ s1a-iw-ocn-hh-20260405t102207-20260405t102237-063943-080B17-001.nc
 a daily trackfile is named like this: trackfile_s1_iw_20260204.txt or
 trackfile_s1_ew_20260204.txt it contains both intra and inter burst tiles. it
 contains all the units together S1A+S1C+S1D for instance. The lines are ordered
-in chronological order. Simultaneous acquisitions can occured with the differnt
-Sentinel-1 unit.
+in chronological order. Simultaneous acquisitions can occurred with the
+different Sentinel-1 unit.
 
 Example of trackfile content: WAVEWATCH III TRACK LOCATIONS DATA 20250407 020615
 -121.93000 35.00000 20250407 020615 -121.81000 35.01000 20250407 020615
