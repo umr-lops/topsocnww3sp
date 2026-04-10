@@ -47,6 +47,9 @@ Homepage = "https://github.com/umr-lops/topsocnww3sp"
 Discussions = "https://github.com/umr-lops/topsocnww3sp/discussions"
 Changelog = "https://github.com/umr-lops/topsocnww3sp/releases"
 
+[project.scripts]
+procl2c = "topsocnww3sp.l2c_processor:main"
+
 
 [dependency-groups]
 test = [
