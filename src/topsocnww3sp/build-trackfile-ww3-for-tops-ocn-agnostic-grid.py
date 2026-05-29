@@ -1,278 +1,178 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
 # encoding *-utf-8-*
 """
-purpose: version of WW3 trackfile generator adapted to S1 ESA TOPS OCN Level-2 osw cross spectra nc files
-This version generates an agnostic trackfile with raw positions from OCN files ordered by dates
+purpose: version of WW3 trackfile generator adapted to S1 ESA TOPS OCN Level-2 osw cross spectra nc files.
+Aggregates all positions from multiple SAFEs into a single globally sorted trackfile.
 """
 
 import argparse
 import datetime
-import glob
 import logging
-import os
 import time
 import traceback
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Union
+from collections import defaultdict
+import numpy as np  # type: ignore[import-not-found]
+import pandas as pd  # type: ignore[import-not-found, import-untyped]
+import xarray as xr  # type: ignore[import-not-found]
+from tqdm import tqdm  # type: ignore[import-not-found, import-untyped]
 
-import numpy as np
-import pandas as pd
-import shapely
-import xarray as xr
-from shapely.geometry import MultiPoint
-from tqdm import tqdm
+# LOG015: Use a named logger instead of the root logger
+logger = logging.getLogger(__name__)
 
 
-def get_polygon_subswath(dsosw) -> shapely.geometry.polygon.Polygon:
+def _parse_single_osw(osw_file: Path) -> List[Dict[str, Any]]:
     """
-    method to get polygon of subswath from osw intraburst group
-
-    :param dsosw: xarray dataset of osw intraburst group
-    :return: shapely polygon of the subswath
+    Helper to parse a single OSW NC file.
     """
-    # use convex hull method from shapely to create polygon with each grid points
-    lons = dsosw["oswLon"].squeeze().values.ravel()
-    lats = dsosw["oswLat"].squeeze().values.ravel()
-    land_points = dsosw["oswLandFlag"].squeeze().values.ravel()
-    # Filter out land points
-    lons = lons[land_points == 0]
-    lats = lats[land_points == 0]
-    # create a list of points (lon, lat)
-    points = list(zip(lons, lats))
+    flag_file_parsed = True
+    positions = []
+    try:
+        if 'ew' in str(osw_file) or "iw" in str(osw_file):
+            with xr.open_dataset(osw_file, group="intraburst", engine="h5netcdf") as dstmp:
+                # Extract timestamp from filename
+                date_part = osw_file.name.split("-")[5]
+                # DTZ007: Added UTC timezone
+                date = datetime.datetime.strptime(date_part, "%Y%m%dt%H%M%S").replace(
+                    tzinfo=datetime.timezone.utc
+                )
 
-    # create a MultiPoint object from the list of points
-    multi_point = MultiPoint(points)
-    convex_hull_polygon = multi_point.convex_hull
-    return convex_hull_polygon
+                lons = dstmp["oswLon"].squeeze().values.ravel()
+                lats = dstmp["oswLat"].squeeze().values.ravel()
+
+                for lon, lat in zip(lons, lats):
+                    positions.append({"lon": lon, "lat": lat, "date": date})
+        else: # wv 'case'
+             assert 'wv' in str(osw_file)
+             with xr.open_dataset(osw_file, engine="h5netcdf") as dstmp:
+                # Extract timestamp from filename
+                date_part = osw_file.name.split("-")[5]
+                # DTZ007: Added UTC timezone
+                date = datetime.datetime.strptime(date_part, "%Y%m%dt%H%M%S").replace(
+                    tzinfo=datetime.timezone.utc
+                )
+
+                lons = dstmp["oswLon"].squeeze().values.ravel()
+                lats = dstmp["oswLat"].squeeze().values.ravel()
+
+                for lon, lat in zip(lons, lats):
+                    positions.append({"lon": lon, "lat": lat, "date": date})
+    except Exception:
+        logger.exception("Error processing %s: %s", osw_file, traceback.format_exc())
+        flag_file_parsed = False
+    return positions,flag_file_parsed
 
 
-def collect_each_matching_locations(safedir, dirout):
+def collect_positions_from_safe(safedir: Union[str, Path], counter: defaultdict) -> List[Dict[str, Any]]:
     """
-    Collect raw positions from OCN files and create an agnostic trackfile
-
-    :param safedir : str path of S1 OCN SAFE where to find measurement (.nc) files
-    :param dirout: str path where to store the .txt files
-    :return:
+    Collect all positions from OCN files within a SAFE directory.
     """
-    # Pattern to find OCN measurement files
-    pattern_osw = os.path.join(safedir, "measurement", "*osw*.nc")
-    lst_osw = glob.glob(pattern_osw)
-    base_safe = os.path.basename(safedir)
-    logging.info("SAFE to process: %s", base_safe)
-    lst_osw = sorted(lst_osw)
-    logging.info("nb L2 OCN osw files to read : %s", len(lst_osw))
-
-    # Store all positions with their timestamps
-    all_positions = []
-
-    pbar = tqdm(range(len(lst_osw)), disable=True if len(lst_osw) < 10 else False)
-
-    for ii in pbar:
-        try:
-            # Open the OCN file
-            dstmp = xr.open_dataset(lst_osw[ii], group="intraburst", engine="h5netcdf")
-
-            # Extract the timestamp from filename
-            filename = os.path.basename(lst_osw[ii])
-            date_part = filename.split("-")[
-                5
-            ]  # Extract date part from filename like 20211122T191629
-            date = datetime.datetime.strptime(date_part, "%Y%m%dt%H%M%S")
-
-            # Get all positions from the subswath
-            lons = dstmp["oswLon"].squeeze().values.ravel()
-            lats = dstmp["oswLat"].squeeze().values.ravel()
-
-            # Create list of (lon, lat, date) tuples for each position
-            for lon, lat in zip(lons, lats):
-                all_positions.append({"lon": lon, "lat": lat, "date": date})
-
-        except KeyboardInterrupt:
-            raise Exception("stop")
-        except Exception:
-            logging.exception(
-                "Error processing %s: %s", lst_osw[ii], traceback.format_exc()
-            )
-            continue
-
-    # Sort all positions by date
-    all_positions.sort(key=lambda x: x["date"])
-
-    # Create DataFrame with sorted positions
-    if len(all_positions) > 0:
-        df = pd.DataFrame(all_positions)
-        logging.info("Total positions collected: %d", len(df))
-        logging.info(
-            "Date range: %s to %s",
-            df["date"].min().strftime("%Y-%m-%d %H:%M:%S"),
-            df["date"].max().strftime("%Y-%m-%d %H:%M:%S"),
-        )
-
-        # Format dates
-        df["YYYYMMDD"] = df["date"].dt.strftime("%Y%m%d")
-        df["HHMMSS"] = df["date"].dt.strftime("%H%M%S")
-
-        # Format coordinates to 2 decimal places
-        df["lon_str"] = df["lon"].map(lambda x: "%.2f" % x)
-        df["lat_str"] = df["lat"].map(lambda x: "%.2f" % x)
-
-        # Reorder columns for trackfile format
-        df = df[["YYYYMMDD", "HHMMSS", "lon_str", "lat_str"]]
-
-        # Create output directory
-        os.makedirs(dirout, exist_ok=True)
-
-        # Save to file
-        fout = os.path.join(
-            dirout,
-            "trackfile-ww3spectra-agnostic-%s.txt" % (base_safe.replace(".SAFE", "")),
-        )
-        df.to_csv(fout, header=False, index=False, sep=" ")
-        logging.info("Agnostic trackfile saved: %s", fout)
+    safe_path = Path(safedir)
+    if 'EW' in safedir or 'IW' in safedir:
+        pattern_osw = "measurement/*osw*.nc"
     else:
-        logging.info("No positions found")
+        pattern_osw = "measurement/*wv*.nc"
+    lst_osw = sorted(list(safe_path.glob(pattern_osw)))
+    
+    logger.debug("SAFE: %s (%d files)", safe_path.name, len(lst_osw))
+
+    safe_positions: List[Dict[str, Any]] = []
+    for osw_file in lst_osw:
+        positions, flag_parsed = _parse_single_osw(osw_file)
+        if flag_parsed:
+            safe_positions.extend(positions)
+            counter['nc_file_read'] += 1
+        else:
+            counter['nc_file_erro'] += 1
+    
+    return safe_positions, counter
 
 
-def entry_point_one_safe():
-    """Process a single SAFE directory"""
-    root = logging.getLogger()
-    if root.handlers:
-        for handler in root.handlers:
-            root.removeHandler(handler)
+def write_aggregated_trackfile(all_positions: List[Dict[str, Any]], dirout: Union[str, Path], dev: bool = False) -> None:
+    """
+    Sorts positions, generates filename based on date range, and writes to disk.
+    """
+    if not all_positions:
+        logger.warning("No positions collected. Nothing to write.")
+        return
 
-    time.sleep(np.random.rand(1, 1)[0][0])  # to avoid issue with mkdir
+    df = pd.DataFrame(all_positions)
+    # Global Sort
+    df = df.sort_values(by="date")
 
-    parser = argparse.ArgumentParser(
-        description="Agnostic trackfile generator for S1 OCN files"
-    )
+    first_date = df["date"].min().strftime("%Y%m%dt%H%M%S")
+    last_date = df["date"].max().strftime("%Y%m%dt%H%M%S")
+    
+    # Format trackfile columns
+    df["YYYYMMDD"] = df["date"].dt.strftime("%Y%m%d")
+    df["HHMMSS"] = df["date"].dt.strftime("%H%M%S")
+    df["lon_str"] = df["lon"].map(lambda x: "%.2f" % x)
+    df["lat_str"] = df["lat"].map(lambda x: "%.2f" % x)
+
+    output_df = df[["YYYYMMDD", "HHMMSS", "lon_str", "lat_str"]]
+
+    out_path = Path(dirout)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    prefix = "trackfile-ww3spectra-agnostic"
+    if dev:
+        prefix += "-DEV"
+        
+    fout = out_path / f"{prefix}-{first_date}-{last_date}.txt"
+    
+    output_df.to_csv(fout, header=False, index=False, sep=" ")
+    logger.info("Agnostic trackfile saved: %s", fout)
+
+
+def entry_point_one_listing_of_safe() -> None:
+    """Process multiple SAFE directories from a listing file into ONE output."""
+    rng = np.random.default_rng()
+    time.sleep(rng.uniform(0, 1))
+
+    parser = argparse.ArgumentParser(description="Agnostic aggregated trackfile generator")
     parser.add_argument("--verbose", action="store_true", default=False)
-    parser.add_argument(
-        "--outputdir", required=True, help="directory where to store output"
-    )
-    parser.add_argument(
-        "--OCNSAFE", required=True, help="directory SAFE where to find OCN files"
-    )
+    parser.add_argument("--dev", action="store_true", default=False, help="Development mode: process only first 3 SAFEs")
+    parser.add_argument("--outputdir", required=True, help="directory where to store output")
+    parser.add_argument("--listing-safe", required=True, help="path of a listing of OCN SAFE files")
     args = parser.parse_args()
 
+    # Logging config
     fmt = "%(asctime)s %(levelname)s %(filename)s(%(lineno)d) %(message)s"
-    if args.verbose:
-        logging.basicConfig(
-            level=logging.DEBUG, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
-    else:
-        logging.basicConfig(
-            level=logging.INFO, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True)
 
     t0 = time.time()
-    collect_each_matching_locations(safedir=args.OCNSAFE, dirout=args.outputdir)
-    elapsed = time.time()
-    logging.info("Time to process SAFE: %1.1f seconds", elapsed - t0)
+    
+    # Load listing
+    with open(args.listing_safe, "r") as f:
+        safes = [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
+    # DEV Mode handling
+    if args.dev:
+        logger.info("--- DEVELOPMENT MODE ACTIVE: Limiting input to first 3 SAFEs ---")
+        safes = safes[:3]
 
-def entry_point_one_listing_of_safe():
-    """Process multiple SAFE directories from a listing file"""
-    root = logging.getLogger()
-    if root.handlers:
-        for handler in root.handlers:
-            root.removeHandler(handler)
+    all_aggregated_positions: List[Dict[str, Any]] = []
 
-    time.sleep(np.random.rand(1, 1)[0][0])  # to avoid issue with mkdir
+    # Aggregation Loop
+    pbar = tqdm(safes, desc="Aggregating SAFEs")
+    counter = defaultdict(int)
+    for safe_dir in pbar:
+        mode = os.path.basename(safe_dir.rstrip('/')).split('_')[1]
+        counter[mode] += 1
+        pbar.set_description("trackfile generation / %s" % counter)
+        addition_positions,counter = collect_positions_from_safe(safe_dir, counter)
+        counter['total_positions'] += len(addition_positions)
+        all_aggregated_positions.extend(addition_positions)
 
-    parser = argparse.ArgumentParser(
-        description="Agnostic trackfile generator for S1 OCN files"
-    )
-    parser.add_argument("--verbose", action="store_true", default=False)
-    parser.add_argument(
-        "--outputdir", required=True, help="directory where to store output"
-    )
-    parser.add_argument(
-        "--listing-safe", required=True, help="path of a listing of OCN SAFE files"
-    )
-    args = parser.parse_args()
-
-    fmt = "%(asctime)s %(levelname)s %(filename)s(%(lineno)d) %(message)s"
-    if args.verbose:
-        logging.basicConfig(
-            level=logging.DEBUG, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
-    else:
-        logging.basicConfig(
-            level=logging.INFO, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
-
-    t0 = time.time()
-    safes = pd.read_csv(args.listing_safe, header=None)[0].tolist()
-
-    for ss in tqdm(range(len(safes))):
-        logging.info("Processing SAFE: %s", safes[ss])
-        collect_each_matching_locations(safedir=safes[ss], dirout=args.outputdir)
-
-    elapsed = time.time()
-    logging.info("Check out the txt files generated in %s", args.outputdir)
-    logging.info("Total time: %1.1f seconds", elapsed - t0)
-
-
-def entry_point_ocn_between_dates():
-    """Process OCN files between specific dates"""
-    root = logging.getLogger()
-    if root.handlers:
-        for handler in root.handlers:
-            root.removeHandler(handler)
-
-    time.sleep(np.random.rand(1, 1)[0][0])  # to avoid issue with mkdir
-
-    parser = argparse.ArgumentParser(
-        description="Agnostic trackfile generator for S1 OCN files"
-    )
-    parser.add_argument("--verbose", action="store_true", default=False)
-    parser.add_argument(
-        "--outputdir", required=True, help="directory where to store output"
-    )
-    parser.add_argument(
-        "--inputdir", required=True, help="directory where OCN are stored"
-    )
-    parser.add_argument("--start", required=True, help="start date YYYYMMDD inclusive")
-    parser.add_argument("--end", required=True, help="end date YYYYMMDD inclusive")
-    args = parser.parse_args()
-
-    fmt = "%(asctime)s %(levelname)s %(filename)s(%(lineno)d) %(message)s"
-    if args.verbose:
-        logging.basicConfig(
-            level=logging.DEBUG, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
-    else:
-        logging.basicConfig(
-            level=logging.INFO, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-        )
-
-    t0 = time.time()
-    safes = []
-
-    for day in pd.date_range(start=args.start, end=args.end):
-        pattern_safe = os.path.join(
-            args.inputdir,
-            day.strftime("%Y"),
-            day.strftime("%m"),
-            day.strftime("%d"),
-            "S1*_OCN__2S*.SAFE",
-        )
-        lst_safe = glob.glob(pattern_safe)
-        safes.extend(lst_safe)
-
-    logging.info("Number of SAFE to process: %s", len(safes))
-
-    for ss in tqdm(range(len(safes))):
-        logging.info("Processing SAFE: %s", safes[ss])
-        collect_each_matching_locations(safedir=safes[ss], dirout=args.outputdir)
-
-    elapsed = time.time()
-    logging.info("Total time: %1.1f seconds", elapsed - t0)
+    # Single Write
+    write_aggregated_trackfile(all_aggregated_positions, args.outputdir, dev=args.dev)
+    logger.info('counter final: %s',counter)
+    elapsed = time.time() - t0
+    logger.info("Total processing time: %1.1f seconds", elapsed)
 
 
 if __name__ == "__main__":
-    # Use one of these entry points depending on your needs:
-    # entry_point_one_safe()  # Process single SAFE directory
-    # entry_point_one_listing_of_safe()  # Process multiple SAFE directories from listing file
-    # entry_point_ocn_between_dates()  # Process SAFE directories between dates
-
-    # Current usage - process listing file
     entry_point_one_listing_of_safe()
