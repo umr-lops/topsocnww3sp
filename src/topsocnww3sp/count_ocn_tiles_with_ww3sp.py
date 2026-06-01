@@ -1,5 +1,6 @@
 import argparse
 import logging
+import typing
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -15,7 +16,7 @@ from topsocnww3sp.utils import get_config
 # TIME_THRESHOLD_MINUTES = 30.0
 
 
-def haversine(lon1, lat1, lon2, lat2):
+def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> np.ndarray:
     """Calculate great circle distance in km."""
     lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1
@@ -25,7 +26,7 @@ def haversine(lon1, lat1, lon2, lat2):
     return c * 6371
 
 
-def parse_track_file(filepath):
+def parse_track_file(filepath: str) -> list[dict[str, typing.Any]]:
     """Parses the text track file into a list of dictionaries."""
     data = []
     logging.info(f"Reading track file: {filepath}")
@@ -55,8 +56,12 @@ def parse_track_file(filepath):
 
 
 def core_count_coverage(
-    track_points, ww3_nc_lons, ww3_nc_lats, ww3_nc_times, pathconfig=None
-):
+    track_points: list[dict[str, typing.Any]],
+    ww3_nc_lons: np.ndarray,
+    ww3_nc_lats: np.ndarray,
+    ww3_nc_times: np.ndarray,
+    pathconfig: str | None = None,
+) -> tuple[list[str], dict[int, int]]:
     """
 
     Arguments:
@@ -131,7 +136,7 @@ def core_count_coverage(
     return summary_lines, results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Match WW3 track output with a trackfile list."
     )

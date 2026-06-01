@@ -84,20 +84,20 @@ def process_group(
     """
     logger.info("--- Processing Group: %s [Mode: %s] ---", group_name, mode)
 
-   # 1. Load and Flatten SAR
+    # 1. Load and Flatten SAR
     fat_osw, _ = read_osw(group_name, [osw_path])
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None, None, None
 
     # fat_osw["time"] = sar_start
-    fat_osw["time"] = np.datetime64(sar_start.replace(tzinfo=None), 'ns')
+    fat_osw["time"] = np.datetime64(sar_start.replace(tzinfo=None), "ns")
 
-# First reset the existing MultiIndex on tiles, then stack all spatial dims flat
+    # First reset the existing MultiIndex on tiles, then stack all spatial dims flat
     ds_reset = fat_osw.reset_index("tiles")
     ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))
     valid_mask = ~np.isnan(ds_stacked["oswLon"].values)
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
-    sar_flat = sar_flat.drop_vars(['all_tiles', 'subswath', 'tiles']).assign_coords(
+    sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
         all_tiles=np.arange(len(sar_flat.all_tiles))
     )
 
@@ -129,7 +129,7 @@ def process_group(
         )
 
         if mode in ["1to1", "unique"]:
-            min_idx = np.argmin(dists)
+            min_idx = int(np.argmin(dists))
             if dists[min_idx] <= dist_thresh:
                 sar_indices.append(i)
                 ww3_indices_rel.append(min_idx)
@@ -225,31 +225,48 @@ def process_group(
 def main() -> None:
     """Main function to process SAR and WW3 data for colocalization."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--osw-file", required=True,
-                        help="path of nc file containing S1 OSW data")
-    parser.add_argument("--ww3-file", default=None,
-                        help="path of nc file containing WW3 spectra. If not provided, the script will search based on SAR time and config directory")
-    parser.add_argument("--config", required=True,
-                        help="Path to YAML config file with thresholds and directories")
-    parser.add_argument("--mode", choices=["1to1", "unique", "many"], default="1to1",
-                        help="Matching mode: '1to1' (one WW3 per SAR), 'unique' (multiple SAR can share same WW3), or 'many' (all matches)"
+    parser.add_argument(
+        "--osw-file", required=True, help="path of nc file containing S1 OSW data"
     )
     parser.add_argument(
-        "--group", choices=["intraburst", "interburst", "both"], default="both",
-        help="Which group(s) to process: 'intraburst', 'interburst', or 'both' (default: both)"
+        "--ww3-file",
+        default=None,
+        help="path of nc file containing WW3 spectra. If not provided, the script will search based on SAR time and config directory",
     )
-    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging"
-        )
-    parser.add_argument('--output-dir',required=True, help='Directory to save output files.')
-    parser.add_argument('--overwrite', action='store_true', 
-                        help='Whether to overwrite existing output files. [optional, default: False]',default=False)
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to YAML config file with thresholds and directories",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["1to1", "unique", "many"],
+        default="1to1",
+        help="Matching mode: '1to1' (one WW3 per SAR), 'unique' (multiple SAR can share same WW3), or 'many' (all matches)",
+    )
+    parser.add_argument(
+        "--group",
+        choices=["intraburst", "interburst", "both"],
+        default="both",
+        help="Which group(s) to process: 'intraburst', 'interburst', or 'both' (default: both)",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--output-dir", required=True, help="Directory to save output files."
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Whether to overwrite existing output files. [optional, default: False]",
+        default=False,
+    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
 
-
     config_path = Path(args.config)
-    config = yaml.safe_load(config_path.open())
+    with config_path.open() as f:
+        config = yaml.safe_load(f)
 
     osw_file_path = Path(args.osw_file)
     fname = osw_file_path.name
@@ -264,21 +281,25 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path= output_dir / Path(output_name)
+    output_path = output_dir / Path(output_name)
     logger.info("Output will be saved to: %s", output_path)
     if output_path.exists():
         output_path.unlink()
 
     if output_path.exists() and not args.overwrite:
-        logger.info("Output file %s already exists. Use --overwrite to allow overwriting.", output_path)
+        logger.info(
+            "Output file %s already exists. Use --overwrite to allow overwriting.",
+            output_path,
+        )
         return
-    
+
     first_write = True
 
     for g in groups:
-        res = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
-        if res[0] is not None:
-            d_sar, d_ww3, d_match = res
+        d_sar, d_ww3, d_match = process_group(
+            args.osw_file, ds_ww3, g, config, sar_start, args.mode
+        )
+        if d_sar is not None and d_ww3 is not None and d_match is not None:
             mode_flag = "w" if first_write else "a"
             logger.info("Writing %s to %s", g, output_path)
             d_sar.to_netcdf(output_path, group=f"SAR_{g}", mode=mode_flag)

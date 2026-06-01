@@ -7,7 +7,7 @@ import pandas as pd
 from tqdm import tqdm
 
 
-def concatenate_trackfiles(input_dir, output_file):
+def concatenate_trackfiles(input_dir: str, output_file: str) -> None:
     pattern = os.path.join(input_dir, "trackfile-ww3spectra-agnostic-*.txt")
     trackfiles = glob.glob(pattern)
 
@@ -64,7 +64,7 @@ def concatenate_trackfiles(input_dir, output_file):
     print(f"Done. Total records: {len(combined_df)}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--output-file", required=True)

@@ -1,6 +1,6 @@
 import argparse
-import glob
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import numpy as np
@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 import yaml
+
+import topsocnww3sp
 
 # Import functions from your script
 from topsocnww3sp.l2c_processor import find_ww3_file, haversine, main, process_group
@@ -70,7 +72,7 @@ def dummy_sar_ds():
         },
         coords={"subswath": sub, "oswRaSize": ra, "oswAzSize": az},
     )
-    return ds.stack(tiles=["oswRaSize", "oswAzSize"])
+    return ds.melt(tiles=["oswRaSize", "oswAzSize"])
 
 
 # --- Tests ---
@@ -82,11 +84,13 @@ def test_haversine():
 
 
 def test_find_ww3_file(mock_config, monkeypatch):
-    # FIXED: using built-in monkeypatch instead of mocker
-    def mock_glob(pattern, recursive=False):
+
+    def mock_rglob(self, pattern):
+        # self est l'instance Path, pattern = "*"
+        print(f"Mock rglob called on {self} with pattern {pattern}")
         return ["/fake/path/ww3/WW3_202201_trck.nc"]
 
-    monkeypatch.setattr(glob, "glob", mock_glob)
+    monkeypatch.setattr(Path, "rglob", mock_rglob)
 
     sar_time = datetime(2022, 1, 7, 6, 25)
     result = find_ww3_file(sar_time, mock_config)
@@ -94,14 +98,14 @@ def test_find_ww3_file(mock_config, monkeypatch):
 
 
 def test_find_ww3_file_not_found(mock_config, monkeypatch):
-    monkeypatch.setattr("glob.glob", lambda x, recursive=False: [])
+    monkeypatch.setattr("glob.glob", lambda _,: [])
     with pytest.raises(FileNotFoundError):
-        find_ww3_file(datetime(2022, 1, 7), mock_config)
+        find_ww3_file(datetime(2022, 1, 7, tzinfo=None), mock_config)
 
 
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many"])
 def test_process_group_modes(mode, dummy_sar_ds, dummy_ww3_ds, mock_config):
-    sar_start = datetime(2022, 1, 7, 6, 0)
+    sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=None)
 
     with patch(
         "topsocnww3sp.l2c_processor.read_osw", return_value=(dummy_sar_ds, None)
@@ -116,7 +120,7 @@ def test_process_group_modes(mode, dummy_sar_ds, dummy_ww3_ds, mock_config):
 
 
 def test_process_group_no_temporal_match(dummy_sar_ds, dummy_ww3_ds, mock_config):
-    sar_start = datetime(2025, 1, 1)
+    sar_start = datetime(2025, 1, 1, tzinfo=None)
     with patch(
         "topsocnww3sp.l2c_processor.read_osw", return_value=(dummy_sar_ds, None)
     ):
@@ -134,7 +138,7 @@ def test_main_integration(monkeypatch, mock_config, dummy_ww3_ds):
         "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc"
     )
     mock_args.ww3_file = "dummy_ww3.nc"
-    mock_args.config = "config.yml"
+    mock_args.config = Path(topsocnww3sp.__file__).parent / "config.yml"
     mock_args.mode = "1to1"
     mock_args.group = "intraburst"
 
@@ -149,10 +153,12 @@ def test_main_integration(monkeypatch, mock_config, dummy_ww3_ds):
     # 3. Mock Xarray and logic
     monkeypatch.setattr(xr, "open_dataset", lambda *_args, **_kwargs: dummy_ww3_ds)
 
-    with patch("xarray.Dataset.to_netcdf") as mock_save:
-        with patch("topsocnww3sp.l2c_processor.process_group") as mock_proc:
-            mock_proc.return_value = (xr.Dataset(), xr.Dataset(), xr.Dataset())
+    with (
+        patch("xarray.Dataset.to_netcdf") as mock_save,
+        patch("topsocnww3sp.l2c_processor.process_group") as mock_proc,
+    ):
+        mock_proc.return_value = (xr.Dataset(), xr.Dataset(), xr.Dataset())
 
-            main()
+        main()
 
-            assert mock_save.called
+        assert mock_save.called

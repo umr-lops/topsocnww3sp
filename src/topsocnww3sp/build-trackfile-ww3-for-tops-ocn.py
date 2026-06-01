@@ -30,7 +30,7 @@ geogridpts = np.stack([XX3.flatten(), YY3.flatten()]).T
 points = MultiPoint(geogridpts)
 
 
-def get_polygon_subswath(dsosw) -> shapely.geometry.polygon.Polygon:
+def get_polygon_subswath(dsosw: xr.Dataset) -> shapely.geometry.polygon.Polygon:
     """
 
     method to get polygon of subswath from osw intraburst group
@@ -50,7 +50,7 @@ def get_polygon_subswath(dsosw) -> shapely.geometry.polygon.Polygon:
     return convex_hull_polygon
 
 
-def collect_each_matching_locations(safedir, dirout):
+def collect_each_matching_locations(safedir: str, dirout: str) -> None:
     """
 
 
@@ -94,7 +94,6 @@ def collect_each_matching_locations(safedir, dirout):
             logging.exception("%s", traceback.format_exc())
             cpt_undreadable += 1
             unreadable_l1c.append(lst_osw[ii])
-            dmkljslfkjl
         if ii == 4:
             pass
     logging.info("unreadable : %s", cpt_undreadable)
@@ -128,7 +127,7 @@ def collect_each_matching_locations(safedir, dirout):
         logging.info("no data")
 
 
-def entry_point_one_safe():
+def entry_point_one_safe() -> None:
     root = logging.getLogger()
     if root.handlers:
         for handler in root.handlers:
@@ -159,7 +158,7 @@ def entry_point_one_safe():
     logging.info("time to do a day: %1.1f seconds", elapsed)
 
 
-def entry_point_one_listing_of_safe():
+def entry_point_one_listing_of_safe() -> None:
     root = logging.getLogger()
     if root.handlers:
         for handler in root.handlers:
@@ -195,7 +194,7 @@ def entry_point_one_listing_of_safe():
     logging.info("time to do a day: %1.1f seconds", elapsed)
 
 
-def entry_point_ocn_between_dates():
+def entry_point_ocn_between_dates() -> None:
     root = logging.getLogger()
     if root.handlers:
         for handler in root.handlers:

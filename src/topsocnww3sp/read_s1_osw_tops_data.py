@@ -12,12 +12,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def read_osw(group, lst_sar_files_osw, dev=False):
+def read_osw(
+    group: str, lst_sar_files_osw: list[str], dev: bool = False
+) -> tuple[xr.Dataset, dict[str, np.ndarray]]:
     """
 
     Args:
         group (str): group in the osw file to read, can be 'intraburst' or 'interburst'
-        lst_sar_files_osw (list): list of osw files to read
+        lst_sar_files_osw (list[str]): list of osw files to read
         dev (bool): flag to indicate if the script is run in development mode, if True, only a subset of files will be processed for testing purposes
 
     Returns:
@@ -30,7 +32,8 @@ def read_osw(group, lst_sar_files_osw, dev=False):
     cpt_subswath_discard = 0
     # lst_sar_files_osw = glob.glob(os.path.join(dd_sar,'dataset_'+dataset_chosen,'*SAFE','measurement','*osw*nc'))
     logger.info("Found %d osw files " % (len(lst_sar_files_osw)))
-    coords_osw = {}
+    coords_osw: dict[str, np.ndarray] = {}
+    # coords_osw = {}
     coords_osw["lon_osw"] = []
     coords_osw["lat_osw"] = []
     fat_osw = None
@@ -116,7 +119,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    logger.setLevel(getattr(logging, args.logging_level.upper(), None))
+    logger.setLevel(getattr(logging, args.logging_level.upper(), "INFO"))
 
     lst_sar_files_osw = glob.glob(
         os.path.join(args.path_to_sar_files, "*SAFE", "measurement", "*osw*nc")

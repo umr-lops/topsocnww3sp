@@ -20,7 +20,17 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def resolve_file_list(input_paths):
+def resolve_file_list(input_paths: list[str]) -> list[str]:
+    """
+
+    Resolves a list of input paths which can be either direct file paths or text files containing lists of file paths.
+
+    Args:
+        input_paths (list[str]): List of input paths. Each path can be a direct file path or a text file containing multiple file paths (one per line).
+    Returns:
+        list[str]: A flattened list of resolved file paths.
+
+    """
     resolved_files = []
     for path in input_paths:
         if path.endswith(".txt"):
@@ -39,7 +49,7 @@ def resolve_file_list(input_paths):
     return resolved_files
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Map OSW tiles, Trackfile, and WW3 spectra with stats."
     )
