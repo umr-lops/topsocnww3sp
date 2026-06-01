@@ -1,8 +1,12 @@
+#!/usr/bin/env python3
+"""Count WW3 spectra associated with each OCN tile from a trackfile."""
+
 import argparse
 import logging
 import typing
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,9 +15,7 @@ from tqdm import tqdm
 
 from topsocnww3sp.utils import get_config
 
-# --- Configuration ---
-# DISTANCE_THRESHOLD_KM = 20.0
-# TIME_THRESHOLD_MINUTES = 30.0
+logger = logging.getLogger(__name__)
 
 
 def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> np.ndarray:
@@ -29,17 +31,22 @@ def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> np.ndarray:
 def parse_track_file(filepath: str) -> list[dict[str, typing.Any]]:
     """Parses the text track file into a list of dictionaries."""
     data = []
-    logging.info(f"Reading track file: {filepath}")
+    logger.info("Reading track file: %s", filepath)
+    path_obj = Path(filepath)
     try:
-        with open(filepath) as f:
-            header = f.readline()
+        with path_obj.open() as f:
+            # Skip header line (unused)
+            _ = f.readline()
             for i, line in enumerate(f):
                 parts = line.split()
                 if len(parts) < 4:
                     continue
                 dt_str = f"{parts[0]} {parts[1]}"
                 try:
-                    dt = datetime.strptime(dt_str, "%Y%m%d %H%M%S")
+                    # Directly create aware datetime
+                    dt = datetime.strptime(dt_str, "%Y%m%d %H%M%S").replace(
+                        tzinfo=timezone.utc
+                    )
                     data.append(
                         {
                             "line_idx": i + 2,
@@ -51,7 +58,7 @@ def parse_track_file(filepath: str) -> list[dict[str, typing.Any]]:
                 except ValueError:
                     continue
     except FileNotFoundError:
-        logging.exception(f"Trackfile not found: {filepath}")
+        logger.exception("Trackfile not found: %s", filepath)
     return data
 
 
@@ -63,7 +70,6 @@ def core_count_coverage(
     pathconfig: str | None = None,
 ) -> tuple[list[str], dict[int, int]]:
     """
-
     Arguments:
         track_points: List of dicts with keys 'line_idx', 'datetime', 'longitude', 'latitude'
         ww3_nc_lons: 1D array of longitudes from WW3 NetCDF
@@ -74,14 +80,13 @@ def core_count_coverage(
     Returns:
         summary_lines: List of strings summarizing the distribution
         results: Dict mapping track line index to count of associated spectra
-
     """
     config = get_config(path_config=pathconfig)
     results = {}
     time_delta = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
 
     # 3. Matching Loop
-    logging.info("Starting matching process...")
+    logger.info("Starting matching process...")
     for pt in tqdm(track_points, desc="Matching"):
         t_start, t_end = pt["datetime"] - time_delta, pt["datetime"] + time_delta
 
@@ -111,8 +116,9 @@ def core_count_coverage(
     summary_lines = []
     summary_lines.append("=" * 80)
     summary_lines.append(
-        f"{'DISTRIBUTION OF WW3 SPECTRA ASSOCIATED PER OCN TILE within %i minutes and %i km':^80}"
-        % (config["TIME_THRESHOLD_MINUTES"], config["DISTANCE_THRESHOLD_KM"])
+        f"{'DISTRIBUTION OF WW3 SPECTRA ASSOCIATED PER OCN TILE within {} minutes and {} km':^80}".format(
+            config["TIME_THRESHOLD_MINUTES"], config["DISTANCE_THRESHOLD_KM"]
+        )
     )
     summary_lines.append("=" * 80)
     summary_lines.append(
@@ -130,9 +136,6 @@ def core_count_coverage(
     summary_lines.append(f"{'TOTAL':<20} | {total_tiles:<15} | 100.00%")
     summary_lines.append("=" * 80)
 
-    # Print summary to terminal
-    for line in summary_lines:
-        print(line)
     return summary_lines, results
 
 
@@ -147,29 +150,33 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # No global logger needed; we just use the module-level logger
+    # The logger was already defined at module level
+
     # 1. Load Trackfile
     track_points = parse_track_file(args.trackfile)
     if not track_points:
         return
     # 2. Open NetCDF datasets
-    logging.info(f"Opening {len(args.ncfiles)} NetCDF file(s)...")
+    logger.info("Opening %d NetCDF file(s)...", len(args.ncfiles))
     try:
         ds = xr.open_mfdataset(
             args.ncfiles, combine="nested", concat_dim="time", decode_times=True
         )
-        ww3_nc_lons = ds.longitude.values
-        ww3_nc_lats = ds.latitude.values
-        ww3_nc_times = pd.to_datetime(ds.time.values)
-    except Exception as e:
-        logging.exception(f"Failed to process NetCDF: {e}")
+        ww3_nc_lons = ds.longitude.to_numpy()
+        ww3_nc_lats = ds.latitude.to_numpy()
+        ww3_nc_times = pd.to_datetime(ds.time.to_numpy())
+    except Exception:
+        logger.exception("Failed to process NetCDF")
         return
 
     summary_lines, results = core_count_coverage(
         track_points, ww3_nc_lons, ww3_nc_lats, ww3_nc_times, pathconfig=args.config
     )
     # 5. Write to Output File
-    logging.info(f"Writing detailed report to {args.output}")
-    with open(args.output, "w") as out:
+    output_path = Path(args.output)
+    logger.info("Writing detailed report to %s", output_path)
+    with output_path.open("w") as out:
         out.write("\n".join(summary_lines) + "\n\n")
         out.write("DETAILED DATA:\n")
         out.write(

@@ -1,5 +1,8 @@
+#!/usr/bin/env python3
+"""Unit tests for l2c_processor module."""
+
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,9 +12,6 @@ import pytest
 import xarray as xr
 import yaml
 
-import topsocnww3sp
-
-# Import functions from your script
 from topsocnww3sp.l2c_processor import find_ww3_file, haversine, main, process_group
 
 
@@ -27,16 +27,16 @@ def mock_config():
 @pytest.fixture
 def dummy_ww3_ds():
     """Creates a small dummy WW3 dataset."""
-    # FIXED: changed 'H' to 'h' for compatibility with newer Pandas
     times = pd.date_range("2022-01-07 06:00", periods=5, freq="h")
     freqs = np.linspace(0.04, 0.4, 3)
     dirs = np.linspace(0, 345, 4)
+    rng = np.random.default_rng()
 
-    ds = xr.Dataset(
+    return xr.Dataset(
         data_vars={
             "efth": (
                 ["time", "frequency", "direction"],
-                np.random.rand(5, 3, 4).astype("f4"),
+                rng.random((5, 3, 4)).astype("f4"),
             ),
             "longitude": (["time"], [-5.0, -4.9, -4.8, -4.7, -4.6]),
             "latitude": (["time"], [48.0, 48.0, 48.0, 48.0, 48.0]),
@@ -48,7 +48,6 @@ def dummy_ww3_ds():
         },
         coords={"time": times, "frequency": freqs, "direction": dirs},
     )
-    return ds
 
 
 @pytest.fixture
@@ -57,7 +56,7 @@ def dummy_sar_ds():
     ra = np.arange(2)
     az = np.arange(3)
     sub = [0]
-
+    rng = np.random.default_rng()
     ds = xr.Dataset(
         data_vars={
             "oswLon": (
@@ -68,11 +67,15 @@ def dummy_sar_ds():
                 ["subswath", "oswRaSize", "oswAzSize"],
                 np.full((1, 2, 3), 48.01),
             ),
-            "oswHs": (["subswath", "oswRaSize", "oswAzSize"], np.random.rand(1, 2, 3)),
+            "oswHs": (
+                ["subswath", "oswRaSize", "oswAzSize"],
+                rng.random((1, 2, 3)).astype("f4"),
+            ),
         },
         coords={"subswath": sub, "oswRaSize": ra, "oswAzSize": az},
     )
-    return ds.melt(tiles=["oswRaSize", "oswAzSize"])
+    # PD013: stack is appropriate here; silence the warning
+    return ds.stack(tiles=["oswRaSize", "oswAzSize"])  # noqa: PD013
 
 
 # --- Tests ---
@@ -84,28 +87,34 @@ def test_haversine():
 
 
 def test_find_ww3_file(mock_config, monkeypatch):
+    """Test find_ww3_file with a mock returning a file."""
 
-    def mock_rglob(self, pattern):
-        # self est l'instance Path, pattern = "*"
-        print(f"Mock rglob called on {self} with pattern {pattern}")
+    def mock_rglob(*_):  # unused arguments
         return ["/fake/path/ww3/WW3_202201_trck.nc"]
 
     monkeypatch.setattr(Path, "rglob", mock_rglob)
 
-    sar_time = datetime(2022, 1, 7, 6, 25)
+    sar_time = datetime(2022, 1, 7, 6, 25, tzinfo=timezone.utc)
     result = find_ww3_file(sar_time, mock_config)
     assert "202201" in result
 
 
 def test_find_ww3_file_not_found(mock_config, monkeypatch):
-    monkeypatch.setattr("glob.glob", lambda _,: [])
+    """Test find_ww3_file when no file is found (raises FileNotFoundError)."""
+
+    def mock_rglob_empty(*_):
+        return []
+
+    monkeypatch.setattr(Path, "rglob", mock_rglob_empty)
+
+    sar_time = datetime(2022, 1, 7, 6, 25, tzinfo=timezone.utc)
     with pytest.raises(FileNotFoundError):
-        find_ww3_file(datetime(2022, 1, 7, tzinfo=None), mock_config)
+        find_ww3_file(sar_time, mock_config)
 
 
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many"])
 def test_process_group_modes(mode, dummy_sar_ds, dummy_ww3_ds, mock_config):
-    sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=None)
+    sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
 
     with patch(
         "topsocnww3sp.l2c_processor.read_osw", return_value=(dummy_sar_ds, None)
@@ -120,7 +129,7 @@ def test_process_group_modes(mode, dummy_sar_ds, dummy_ww3_ds, mock_config):
 
 
 def test_process_group_no_temporal_match(dummy_sar_ds, dummy_ww3_ds, mock_config):
-    sar_start = datetime(2025, 1, 1, tzinfo=None)
+    sar_start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     with patch(
         "topsocnww3sp.l2c_processor.read_osw", return_value=(dummy_sar_ds, None)
     ):
@@ -138,21 +147,30 @@ def test_main_integration(monkeypatch, mock_config, dummy_ww3_ds):
         "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc"
     )
     mock_args.ww3_file = "dummy_ww3.nc"
-    mock_args.config = Path(topsocnww3sp.__file__).parent / "config.yml"
+    mock_args.config = Path("/fake/path/config.yml")
     mock_args.mode = "1to1"
     mock_args.group = "intraburst"
+    mock_args.verbose = False
+    mock_args.output_dir = "/fake/output"
+    mock_args.overwrite = False
 
-    # Fix ARG005 by replacing 'self' with '_'
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda _: mock_args)
 
-    # Also fix 'x' here if the linter flags it
+    # 2. Mock Path.open() to avoid real file opening
+    monkeypatch.setattr(Path, "open", lambda *_, **__: MagicMock())
+
+    # 3. Mock yaml.safe_load to return config
     monkeypatch.setattr(yaml, "safe_load", lambda _: mock_config)
 
-    monkeypatch.setattr("builtins.open", MagicMock())
+    # 4. Mock xarray.open_dataset
+    monkeypatch.setattr(xr, "open_dataset", lambda *_, **__: dummy_ww3_ds)
 
-    # 3. Mock Xarray and logic
-    monkeypatch.setattr(xr, "open_dataset", lambda *_args, **_kwargs: dummy_ww3_ds)
+    # 5. Mock filesystem methods to avoid real access
+    monkeypatch.setattr(Path, "mkdir", lambda *_, **__: None)
+    monkeypatch.setattr(Path, "exists", lambda _: False)
+    monkeypatch.setattr(Path, "unlink", lambda *_, **__: None)
 
+    # 6. Mock to_netcdf and process_group
     with (
         patch("xarray.Dataset.to_netcdf") as mock_save,
         patch("topsocnww3sp.l2c_processor.process_group") as mock_proc,

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-# encoding *-utf-8-*
 """
-purpose: version of WW3 trackfile generator adapted to S1 ESA TOPS OCN Level-2 osw cross spectra nc files.
+Purpose: version of WW3 trackfile generator adapted to S1 ESA TOPS OCN Level-2 osw cross spectra nc files.
 Aggregates all positions from multiple SAFEs into a single globally sorted trackfile.
 """
 
 import argparse
 import datetime
 import logging
-import os
 import time
 import traceback
 from collections import defaultdict
@@ -20,7 +18,6 @@ import pandas as pd
 import xarray as xr
 from tqdm import tqdm
 
-# LOG015: Use a named logger instead of the root logger
 logger = logging.getLogger(__name__)
 
 
@@ -37,30 +34,28 @@ def _parse_single_osw(osw_file: Path) -> tuple[list[dict[str, Any]], bool]:
             ) as dstmp:
                 # Extract timestamp from filename
                 date_part = osw_file.name.split("-")[5]
-                # DTZ007: Added UTC timezone
                 date = datetime.datetime.strptime(date_part, "%Y%m%dt%H%M%S").replace(
                     tzinfo=datetime.timezone.utc
                 )
 
-                lons = dstmp["oswLon"].squeeze().values.ravel()
-                lats = dstmp["oswLat"].squeeze().values.ravel()
+                lons = dstmp["oswLon"].squeeze().to_numpy().ravel()
+                lats = dstmp["oswLat"].squeeze().to_numpy().ravel()
 
-                for lon, lat in zip(lons, lats):
+                for lon, lat in zip(lons, lats, strict=False):
                     positions.append({"lon": lon, "lat": lat, "date": date})
         else:  # wv 'case'
             assert "wv" in str(osw_file)
             with xr.open_dataset(osw_file, engine="h5netcdf") as dstmp:
                 # Extract timestamp from filename
                 date_part = osw_file.name.split("-")[5]
-                # DTZ007: Added UTC timezone
                 date = datetime.datetime.strptime(date_part, "%Y%m%dt%H%M%S").replace(
                     tzinfo=datetime.timezone.utc
                 )
 
-                lons = dstmp["oswLon"].squeeze().values.ravel()
-                lats = dstmp["oswLat"].squeeze().values.ravel()
+                lons = dstmp["oswLon"].squeeze().to_numpy().ravel()
+                lats = dstmp["oswLat"].squeeze().to_numpy().ravel()
 
-                for lon, lat in zip(lons, lats):
+                for lon, lat in zip(lons, lats, strict=False):
                     positions.append({"lon": lon, "lat": lat, "date": date})
     except Exception:
         logger.exception("Error processing %s: %s", osw_file, traceback.format_exc())
@@ -79,7 +74,8 @@ def collect_positions_from_safe(
         pattern_osw = "measurement/*osw*.nc"
     else:
         pattern_osw = "measurement/*wv*.nc"
-    lst_osw = sorted(list(safe_path.glob(pattern_osw)))
+    # Remove unnecessary list() call
+    lst_osw = sorted(safe_path.glob(pattern_osw))
 
     logger.debug("SAFE: %s (%d files)", safe_path.name, len(lst_osw))
 
@@ -112,11 +108,11 @@ def write_aggregated_trackfile(
     first_date = df["date"].min().strftime("%Y%m%dt%H%M%S")
     last_date = df["date"].max().strftime("%Y%m%dt%H%M%S")
 
-    # Format trackfile columns
+    # Format trackfile columns using f-strings
     df["YYYYMMDD"] = df["date"].dt.strftime("%Y%m%d")
     df["HHMMSS"] = df["date"].dt.strftime("%H%M%S")
-    df["lon_str"] = df["lon"].map(lambda x: "%.2f" % x)
-    df["lat_str"] = df["lat"].map(lambda x: "%.2f" % x)
+    df["lon_str"] = df["lon"].map(lambda x: f"{x:.2f}")
+    df["lat_str"] = df["lat"].map(lambda x: f"{x:.2f}")
 
     output_df = df[["YYYYMMDD", "HHMMSS", "lon_str", "lat_str"]]
 
@@ -165,8 +161,9 @@ def entry_point_one_listing_of_safe() -> None:
 
     t0 = time.time()
 
-    # Load listing
-    with open(args.listing_safe) as f:
+    # Load listing using Path.open()
+    listing_path = Path(args.listing_safe)
+    with listing_path.open() as f:
         safes = [
             line.strip() for line in f if line.strip() and not line.startswith("#")
         ]
@@ -180,13 +177,12 @@ def entry_point_one_listing_of_safe() -> None:
 
     # Aggregation Loop
     pbar = tqdm(safes, desc="Aggregating SAFEs")
-    # declare a counter variable with type annotation
     counter: defaultdict[str, int] = defaultdict(int)
-    # counter = defaultdict(int)
     for safe_dir in pbar:
-        mode = os.path.basename(safe_dir.rstrip("/")).split("_")[1]
+        # Use Path(...).name instead of os.path.basename
+        mode = Path(safe_dir.rstrip("/")).name.split("_")[1]
         counter[mode] += 1
-        pbar.set_description("trackfile generation / %s" % counter)
+        pbar.set_description(f"trackfile generation / {counter}")
         addition_positions, counter = collect_positions_from_safe(safe_dir, counter)
         counter["total_positions"] += len(addition_positions)
         all_aggregated_positions.extend(addition_positions)

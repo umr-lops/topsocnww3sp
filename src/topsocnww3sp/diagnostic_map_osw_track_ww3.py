@@ -1,6 +1,9 @@
+#!/usr/bin/env python3
+"""Diagnostic map for OSW tiles, trackfile and WW3 spectra coverage."""
+
 import argparse
 import logging
-import os
+from pathlib import Path
 
 import cartopy.crs as ccrs
 import cartopy.io.img_tiles as cimgt
@@ -20,24 +23,27 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def resolve_file_list(input_paths: list[str]) -> list[str]:
+def resolve_file_list(input_paths: list[Path]) -> list[Path]:
     """
-
-    Resolves a list of input paths which can be either direct file paths or text files containing lists of file paths.
+    Resolves a list of input paths which can be either direct file paths
+    or text files containing lists of file paths.
 
     Args:
-        input_paths (list[str]): List of input paths. Each path can be a direct file path or a text file containing multiple file paths (one per line).
-    Returns:
-        list[str]: A flattened list of resolved file paths.
+        input_paths (list[Path]): List of input paths. Each path can be a
+            direct file path or a text file containing multiple file paths
+            (one per line).
 
+    Returns:
+        list[Path]: A flattened list of resolved file paths.
     """
     resolved_files = []
     for path in input_paths:
         if path.endswith(".txt"):
-            if not os.path.exists(path):
-                logger.error(f"Listing file not found: {path}")
+            path_obj = Path(path)
+            if not path_obj.exists():
+                logger.error("Listing file not found: %s", path)
                 continue
-            with open(path) as f:
+            with path_obj.open() as f:
                 files_from_txt = [
                     line.strip()
                     for line in f
@@ -74,9 +80,9 @@ def main() -> None:
 
     logger.info("Loading WW3 data and calculating coverage...")
     ds_ww3 = xr.open_mfdataset(ww3_paths, combine="nested", concat_dim="time")
-    ww3_lons = ds_ww3.longitude.values.flatten()
-    ww3_lats = ds_ww3.latitude.values.flatten()
-    ww3_times = pd.to_datetime(ds_ww3.time.values)
+    ww3_lons = ds_ww3.longitude.to_numpy().flatten()
+    ww3_lats = ds_ww3.latitude.to_numpy().flatten()
+    ww3_times = pd.to_datetime(ds_ww3.time.to_numpy())
 
     # 2. Run logic to get summary and hit counts per point
     summary_lines, results = core_count_coverage(
@@ -116,7 +122,7 @@ def main() -> None:
         c="magenta",
         marker="s",
         edgecolors="white",
-        label="S1 OSW (%i)" % len(coords_osw["lon_osw"]),
+        label=f"S1 OSW ({len(coords_osw['lon_osw'])})",
     )
     ax1.scatter(
         t_lons,
@@ -126,7 +132,7 @@ def main() -> None:
         c="yellow",
         marker="D",
         edgecolors="black",
-        label="Trackfile (%i)" % len(t_lons),
+        label=f"Trackfile ({len(t_lons)})",
         alpha=0.6,
     )
     ax1.scatter(
@@ -136,7 +142,7 @@ def main() -> None:
         s=8,
         c="cyan",
         alpha=0.3,
-        label="WW3 (%i)" % len(ww3_lons),
+        label=f"WW3 ({len(ww3_lons)})",
     )
 
     ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
@@ -150,17 +156,17 @@ def main() -> None:
         fontsize=8,
         family="monospace",
         verticalalignment="center",
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.9),
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.9},
     )
 
     out1 = args.output
     plt.savefig(out1, bbox_inches="tight")
-    logger.info(f"Saved Figure 1 to {out1}")
+    logger.info("Saved Figure 1 to %s", out1)
 
     # ---------------------------------------------------------
     # FIGURE 2: HIT COUNT GRADIENT MAP
     # ---------------------------------------------------------
-    fig2 = plt.figure(figsize=(14, 10), dpi=110)
+    plt.figure(figsize=(14, 10), dpi=110)
     ax2 = plt.axes(projection=request.crs)
     ax2.set_extent(extent, crs=ccrs.PlateCarree())
     ax2.add_image(request, args.zoom)
@@ -181,7 +187,7 @@ def main() -> None:
         label="0 WW3 Spectra",
     )
 
-    # 2. Plot >0 hits with graduate colors (using 'viridis' or 'plasma' for better visibility on satellite)
+    # 2. Plot >0 hits with graduate colors (using 'viridis' or 'plasma')
     if np.any(mask_pos):
         sc = ax2.scatter(
             t_lons[mask_pos],
@@ -207,7 +213,7 @@ def main() -> None:
 
     out2 = args.output.replace(".png", "_hit_distribution.png")
     plt.savefig(out2, bbox_inches="tight")
-    logger.info(f"Saved Figure 2 to {out2}")
+    logger.info("Saved Figure 2 to %s", out2)
 
     plt.show()
 

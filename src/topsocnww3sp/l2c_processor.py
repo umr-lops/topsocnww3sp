@@ -85,7 +85,8 @@ def process_group(
     logger.info("--- Processing Group: %s [Mode: %s] ---", group_name, mode)
 
     # 1. Load and Flatten SAR
-    fat_osw, _ = read_osw(group_name, [osw_path])
+    # read_osw is not yet typed, silence mypy
+    fat_osw, _ = read_osw(group_name, [osw_path])  # type: ignore[no-untyped-call]
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None, None, None
 
@@ -94,8 +95,9 @@ def process_group(
 
     # First reset the existing MultiIndex on tiles, then stack all spatial dims flat
     ds_reset = fat_osw.reset_index("tiles")
-    ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))
-    valid_mask = ~np.isnan(ds_stacked["oswLon"].values)
+    # PD013: stack is fine here, we keep it
+    ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
+    valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
     sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
         all_tiles=np.arange(len(sar_flat.all_tiles))
@@ -124,9 +126,10 @@ def process_group(
 
     for i in range(n_tiles):
         tile = sar_flat.isel(all_tiles=i)
-        dists = haversine(
-            tile.oswLon.to_numpy(), tile.oswLat.to_numpy(), cand_lons, cand_lats
-        )
+        # Extract scalar values from 0D arrays to satisfy mypy
+        lon_val = float(tile.oswLon)
+        lat_val = float(tile.oswLat)
+        dists = haversine(lon_val, lat_val, cand_lons, cand_lats)
 
         if mode in ["1to1", "unique"]:
             min_idx = int(np.argmin(dists))
@@ -215,6 +218,9 @@ def process_group(
             },
             coords={"pair": np.arange(len(sar_indices))},
         )
+    else:
+        # Unreachable, but keep mypy happy
+        return None, None, None
 
     # Ensure SAR group also has clean integer indices
     ds_sar = sar_flat.reset_index("all_tiles").assign_coords(all_tiles=tile_coords)
@@ -296,16 +302,16 @@ def main() -> None:
     first_write = True
 
     for g in groups:
-        d_sar, d_ww3, d_match = process_group(
-            args.osw_file, ds_ww3, g, config, sar_start, args.mode
-        )
+        result = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
+        d_sar, d_ww3, d_match = result
+        # Explicitly check each component to satisfy mypy
         if d_sar is not None and d_ww3 is not None and d_match is not None:
             mode_flag = "w" if first_write else "a"
             logger.info("Writing %s to %s", g, output_path)
             d_sar.to_netcdf(output_path, group=f"SAR_{g}", mode=mode_flag)
-            d_ww3 = d_ww3.copy()
-            d_ww3.encoding.clear()
-            d_ww3.to_netcdf(output_path, group=f"WW3_{g}", mode="a")
+            d_ww3_copy = d_ww3.copy()
+            d_ww3_copy.encoding.clear()
+            d_ww3_copy.to_netcdf(output_path, group=f"WW3_{g}", mode="a")
             d_match.to_netcdf(output_path, group=f"MATCH_MAP_{g}", mode="a")
             first_write = False
 

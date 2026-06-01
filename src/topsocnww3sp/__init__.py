@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Copyright (c) 2026 Antoine Grouazel. All rights reserved.
 
 topsocnww3sp: Python lib to associate Sentinel-1 OCN TOPS products with WW3 spectra.
