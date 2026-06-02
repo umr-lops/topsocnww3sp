@@ -14,6 +14,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def clean_source_path(full_path: str) -> str:
+    """Extract the meaningful part of the OSW file path."""
+    path = Path(full_path)
+    parts = path.parts
+    # Chercher l'index du dossier "dataset_G" (ou un motif connu)
+    try:
+        idx = parts.index("dataset_G")  # ou "dataset_validation_xspecTops_ipf403" ?
+        # Prendre tout après cet index
+        clean = Path(*parts[idx + 1 :])  # +1 pour sauter dataset_G
+    except ValueError:
+        # Fallback : prendre les 3 derniers dossiers (SAFE/measurement/fichier)
+        clean = Path(*parts[-3:]) if len(parts) >= 3 else Path(path.name)
+    return str(clean)
+
+
 def read_osw(
     group: str, lst_sar_files_osw: list[Path], dev: bool = False
 ) -> tuple[xr.Dataset, dict[str, np.ndarray]]:
@@ -48,7 +63,8 @@ def read_osw(
     for ii in tqdm(range(len(lst_sar_files_osw))):
         onesarfileocn = lst_sar_files_osw[ii]
         dsosw = xr.open_dataset(onesarfileocn, group=group)
-        dsosw["onesarfileocn"] = onesarfileocn
+        # dsosw["onesarfileocn"] = onesarfileocn
+        dsosw.attrs["source_file"] = clean_source_path(onesarfileocn)
         # Use .to_numpy() instead of .values
         coords_osw["lon_osw"] = np.hstack(
             [coords_osw["lon_osw"], dsosw["oswLon"].squeeze().to_numpy().ravel()]
