@@ -98,8 +98,8 @@ def collect_each_matching_locations(safedir: str, dirout: str) -> None:
             # Re-raise KeyboardInterrupt without modification
             logger.info("KeyboardInterrupt received, exiting gracefully.")
             raise
-        except (OSError, ValueError, KeyError, IndexError, RuntimeError) as e:
-            logger.exception("Error processing %s gives %s", osw_file, str(e))
+        except (OSError, ValueError, KeyError, IndexError, RuntimeError):
+            logger.exception("Error processing %s ", osw_file)
             cpt_unreadable += 1
             unreadable_l1c.append(str(osw_file))
 
