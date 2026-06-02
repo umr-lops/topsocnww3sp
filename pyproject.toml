@@ -41,6 +41,11 @@ dependencies = [
   "cartopy",
   "scipy"
 ]
+[project.optional-dependencies]
+plot = [
+  "matplotlib",
+  "cartopy",
+]
 
 [project.urls]
 Homepage = "https://github.com/umr-lops/topsocnww3sp"
