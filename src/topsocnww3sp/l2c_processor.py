@@ -86,7 +86,7 @@ def process_group(
 
     # 1. Load and Flatten SAR
     # read_osw is not yet typed, silence mypy
-    fat_osw, _ = read_osw(group_name, [osw_path])  # type: ignore[no-untyped-call]
+    fat_osw, _ = read_osw(group_name, [Path(osw_path)])
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None, None, None
 
@@ -115,8 +115,8 @@ def process_group(
         return None, None, None
 
     cand_idx_orig = np.where(t_mask)[0]
-    cand_lons = ds_ww3.longitude.to_numpy()[t_mask]
-    cand_lats = ds_ww3.latitude.to_numpy()[t_mask]
+    cand_lons: np.ndarray = ds_ww3.longitude.to_numpy()[t_mask]
+    cand_lats: np.ndarray = ds_ww3.latitude.to_numpy()[t_mask]
     dist_thresh = config["DISTANCE_THRESHOLD_KM"]
 
     # 3. Matchup Logic
@@ -129,10 +129,10 @@ def process_group(
         # Extract scalar values from 0D arrays to satisfy mypy
         lon_val = float(tile.oswLon)
         lat_val = float(tile.oswLat)
-        dists = haversine(lon_val, lat_val, cand_lons, cand_lats)
+        dists: np.ndarray = haversine(lon_val, lat_val, cand_lons, cand_lats)
 
         if mode in ["1to1", "unique"]:
-            min_idx = int(np.argmin(dists))
+            min_idx: int = int(np.argmin(dists))
             if dists[min_idx] <= dist_thresh:
                 sar_indices.append(i)
                 ww3_indices_rel.append(min_idx)

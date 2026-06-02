@@ -23,13 +23,13 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def resolve_file_list(input_paths: list[Path]) -> list[Path]:
+def resolve_file_list(input_paths: list[str]) -> list[Path]:
     """
     Resolves a list of input paths which can be either direct file paths
     or text files containing lists of file paths.
 
     Args:
-        input_paths (list[Path]): List of input paths. Each path can be a
+        input_paths (list[str]): List of input paths. Each path can be a
             direct file path or a text file containing multiple file paths
             (one per line).
 
@@ -37,21 +37,21 @@ def resolve_file_list(input_paths: list[Path]) -> list[Path]:
         list[Path]: A flattened list of resolved file paths.
     """
     resolved_files = []
-    for path in input_paths:
-        if path.endswith(".txt"):
-            path_obj = Path(path)
+    for path_str in input_paths:
+        if path_str.endswith(".txt"):
+            path_obj = Path(path_str)
             if not path_obj.exists():
-                logger.error("Listing file not found: %s", path)
+                logger.error("Listing file not found: %s", path_str)
                 continue
             with path_obj.open() as f:
                 files_from_txt = [
-                    line.strip()
+                    Path(line.strip())
                     for line in f
                     if line.strip() and not line.startswith("#")
                 ]
                 resolved_files.extend(files_from_txt)
         else:
-            resolved_files.append(path)
+            resolved_files.append(Path(path_str))
     return resolved_files
 
 

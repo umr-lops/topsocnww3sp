@@ -129,8 +129,10 @@ module = [
     "matplotlib.*",
     "yaml.*",
     "zarr.*",
+    "dateutil.*",
 ]
 ignore_missing_imports = true
+
 
 
 [tool.ruff]

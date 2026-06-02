@@ -11,7 +11,7 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 
-def _read_single_trackfile(trackfile: Path):
+def _read_single_trackfile(trackfile: Path) -> pd.DataFrame | None:
     """
     Read a single trackfile and return a DataFrame, or None if error.
     """
