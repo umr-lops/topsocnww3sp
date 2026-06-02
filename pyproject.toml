@@ -36,6 +36,7 @@ dependencies = [
   "tqdm",
   "pandas",
   "numpy",
+  "pyyaml",
   "matplotlib",
   "cartopy",
   "scipy"
