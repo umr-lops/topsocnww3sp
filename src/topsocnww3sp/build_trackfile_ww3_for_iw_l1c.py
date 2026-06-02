@@ -51,12 +51,11 @@ def _process_single_l1c(
                     lons.append(individualpt.x)
                     lats.append(individualpt.y)
                     dates.append(date)
-    except Exception:
+    except (OSError, ValueError, KeyError, IndexError, RuntimeError):
         logger.exception("Error reading %s: %s", l1c_file, traceback.format_exc())
         return None
-    else:
-        # TRY300: return moved to else block
-        return lons, lats, dates
+
+    return lons, lats, dates
 
 
 def collect_each_matching_locations(

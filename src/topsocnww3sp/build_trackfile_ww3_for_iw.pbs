@@ -7,6 +7,7 @@
 echo start
 # inputs
 #$1 str day YYYYMMDD
+# shellcheck disable=SC1091
 . /appli/anaconda/latest/etc/profile.d/conda.sh
 #conda activate /home/datawork-cersat-public/cache/project/mpc-sentinel1/workspace/mamba/envs/xsar_oct22
 conda activate /home/datawork-cersat-public/project/mpc-sentinel1/workspace/mamba/envs/l1bprocmars23

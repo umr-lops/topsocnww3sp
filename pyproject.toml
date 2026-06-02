@@ -36,9 +36,15 @@ dependencies = [
   "tqdm",
   "pandas",
   "numpy",
+  "pyyaml",
   "matplotlib",
   "cartopy",
   "scipy"
+]
+[project.optional-dependencies]
+plot = [
+  "matplotlib",
+  "cartopy",
 ]
 
 [project.urls]
@@ -109,10 +115,14 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 warn_unreachable = true
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
+ignore_missing_imports = true
+disallow_any_unimported = false
+warn_return_any = false
 
 [[tool.mypy.overrides]]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+disable_error_code = "type-arg"
 module = [
     "topsocnww3sp.*",
     "numpy.*",
@@ -124,8 +134,11 @@ module = [
     "cartopy.*",
     "matplotlib.*",
     "yaml.*",
+    "zarr.*",
+    "dateutil.*",
 ]
 ignore_missing_imports = true
+
 
 
 [tool.ruff]
@@ -173,6 +186,7 @@ extend-select = [
 ignore = [
   "PLR09",    # Too many <...>
   "PLR2004",  # Magic value used in comparison
+  "EXE001",   # permission for shebang
 ]
 # Uncomment if using a _compat.typing backport
 # typing-modules = ["topsocnww3sp._compat.typing"]

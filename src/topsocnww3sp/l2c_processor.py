@@ -11,31 +11,12 @@ import xarray as xr
 import yaml
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
+from topsocnww3sp.utils import haversine
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
-    """Calculate the great circle distance between two points on the earth
-    (specified in decimal degrees).
-
-    Args:
-        lon1: Longitude of first point in decimal degrees
-        lat1: Latitude of first point in decimal degrees
-        lon2: Longitude of second point in decimal degrees
-        lat2: Latitude of second point in decimal degrees
-
-    Returns:
-        Distance between the two points in kilometers
-    """
-    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    return 2 * np.arcsin(np.sqrt(a)) * 6371
 
 
 def find_ww3_file(sar_time: datetime, config: dict[str, Any]) -> str:
@@ -85,23 +66,29 @@ def process_group(
     logger.info("--- Processing Group: %s [Mode: %s] ---", group_name, mode)
 
     # 1. Load and Flatten SAR
-    fat_osw, _ = read_osw(group_name, [osw_path])
+    # read_osw is not yet typed, silence mypy
+    fat_osw, _ = read_osw(group_name, [Path(osw_path)])
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None, None, None
 
-    fat_osw["time"] = sar_start
-    sar_flat = (
-        fat_osw.reset_index("tiles")
-        .melt(
-            id_vars=["subswath", "tiles"], var_name="all_tiles", value_vars=["oswLon"]
-        )
-        .dropna("all_tiles", subset=["oswLon"])
+    # fat_osw["time"] = sar_start
+    fat_osw["time"] = np.datetime64(sar_start.replace(tzinfo=None), "ns")
+
+    # First reset the existing MultiIndex on tiles, then stack all spatial dims flat
+    ds_reset = fat_osw.reset_index("tiles")
+    # PD013: stack is fine here, we keep it
+    ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
+    valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
+    sar_flat = ds_stacked.isel(all_tiles=valid_mask)
+    sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
+        all_tiles=np.arange(len(sar_flat.all_tiles))
     )
+
     n_tiles = len(sar_flat.all_tiles)
 
     # 2. Temporal Filter WW3
     ww3_times = pd.to_datetime(ds_ww3.time.to_numpy())
-    t_sar = pd.to_datetime(sar_start)
+    t_sar = pd.Timestamp(sar_start).tz_localize(None)  # strip tzinfo for comparison
     t_thresh = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
     t_mask = (ww3_times >= t_sar - t_thresh) & (ww3_times <= t_sar + t_thresh)
 
@@ -109,8 +96,8 @@ def process_group(
         return None, None, None
 
     cand_idx_orig = np.where(t_mask)[0]
-    cand_lons = ds_ww3.longitude.to_numpy()[t_mask]
-    cand_lats = ds_ww3.latitude.to_numpy()[t_mask]
+    cand_lons: np.ndarray = ds_ww3.longitude.to_numpy()[t_mask]
+    cand_lats: np.ndarray = ds_ww3.latitude.to_numpy()[t_mask]
     dist_thresh = config["DISTANCE_THRESHOLD_KM"]
 
     # 3. Matchup Logic
@@ -120,12 +107,13 @@ def process_group(
 
     for i in range(n_tiles):
         tile = sar_flat.isel(all_tiles=i)
-        dists = haversine(
-            tile.oswLon.to_numpy(), tile.oswLat.to_numpy(), cand_lons, cand_lats
-        )
+        # Extract scalar values from 0D arrays to satisfy mypy
+        lon_val = float(tile.oswLon)
+        lat_val = float(tile.oswLat)
+        dists: np.ndarray = haversine(lon_val, lat_val, cand_lons, cand_lats)
 
         if mode in ["1to1", "unique"]:
-            min_idx = np.argmin(dists)
+            min_idx: int = int(np.argmin(dists))
             if dists[min_idx] <= dist_thresh:
                 sar_indices.append(i)
                 ww3_indices_rel.append(min_idx)
@@ -211,6 +199,9 @@ def process_group(
             },
             coords={"pair": np.arange(len(sar_indices))},
         )
+    else:
+        # Unreachable, but keep mypy happy
+        return None, None, None
 
     # Ensure SAR group also has clean integer indices
     ds_sar = sar_flat.reset_index("all_tiles").assign_coords(all_tiles=tile_coords)
@@ -221,17 +212,48 @@ def process_group(
 def main() -> None:
     """Main function to process SAR and WW3 data for colocalization."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--osw-file", required=True)
-    parser.add_argument("--ww3-file", default=None)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--mode", choices=["1to1", "unique", "many"], default="1to1")
     parser.add_argument(
-        "--group", choices=["intraburst", "interburst", "both"], default="both"
+        "--osw-file", required=True, help="path of nc file containing S1 OSW data"
+    )
+    parser.add_argument(
+        "--ww3-file",
+        default=None,
+        help="path of nc file containing WW3 spectra. If not provided, the script will search based on SAR time and config directory",
+    )
+    parser.add_argument(
+        "--config",
+        required=True,
+        help="Path to YAML config file with thresholds and directories",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["1to1", "unique", "many"],
+        default="1to1",
+        help="Matching mode: '1to1' (one WW3 per SAR), 'unique' (multiple SAR can share same WW3), or 'many' (all matches)",
+    )
+    parser.add_argument(
+        "--group",
+        choices=["intraburst", "interburst", "both"],
+        default="both",
+        help="Which group(s) to process: 'intraburst', 'interburst', or 'both' (default: both)",
+    )
+    parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
+    parser.add_argument(
+        "--output-dir", required=True, help="Directory to save output files."
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Whether to overwrite existing output files. [optional, default: False]",
+        default=False,
     )
     args = parser.parse_args()
 
+    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+
     config_path = Path(args.config)
-    config = yaml.safe_load(config_path.open())
+    with config_path.open(encoding="utf-8") as f:
+        config = yaml.safe_load(f)
 
     osw_file_path = Path(args.osw_file)
     fname = osw_file_path.name
@@ -244,21 +266,34 @@ def main() -> None:
     ds_ww3 = xr.open_dataset(ww3_path)
     groups = ["intraburst", "interburst"] if args.group == "both" else [args.group]
 
-    output_path = Path(output_name)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / Path(output_name)
+    logger.info("Output will be saved to: %s", output_path)
     if output_path.exists():
         output_path.unlink()
+
+    if output_path.exists() and not args.overwrite:
+        logger.info(
+            "Output file %s already exists. Use --overwrite to allow overwriting.",
+            output_path,
+        )
+        return
 
     first_write = True
 
     for g in groups:
-        res = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
-        if res[0] is not None:
-            d_sar, d_ww3, d_match = res
+        result = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
+        d_sar, d_ww3, d_match = result
+        # Explicitly check each component to satisfy mypy
+        if d_sar is not None and d_ww3 is not None and d_match is not None:
             mode_flag = "w" if first_write else "a"
-            logger.info("Writing %s to %s", g, output_name)
-            d_sar.to_netcdf(output_name, group=f"SAR_{g}", mode=mode_flag)
-            d_ww3.to_netcdf(output_name, group=f"WW3_{g}", mode="a")
-            d_match.to_netcdf(output_name, group=f"MATCH_MAP_{g}", mode="a")
+            logger.info("Writing %s to %s", g, output_path)
+            d_sar.to_netcdf(output_path, group=f"SAR_{g}", mode=mode_flag)
+            d_ww3_copy = d_ww3.copy()
+            d_ww3_copy.encoding.clear()
+            d_ww3_copy.to_netcdf(output_path, group=f"WW3_{g}", mode="a")
+            d_match.to_netcdf(output_path, group=f"MATCH_MAP_{g}", mode="a")
             first_write = False
 
     logger.info("Done.")
