@@ -115,11 +115,13 @@ if __name__ == "__main__":
 
     logger.setLevel(getattr(logging, args.logging_level.upper(), "INFO"))
 
-    lst_sar_files_osw = list(Path(args.path_to_sar_files).rglob("**/*osw*nc"))
+    lst_sar_files_osw_from_main = list(Path(args.path_to_sar_files).rglob("**/*osw*nc"))
 
-    logger.info("Found %d osw files ", len(lst_sar_files_osw))
-    fat_osw, coords_osw = read_osw(args.group, lst_sar_files_osw, dev=args.dev)
-    logger.info(
-        "Done reading osw files, fat_osw shape: %s", str(coords_osw["lon_osw"].shape)
+    logger.info("Found %d osw files ", len(lst_sar_files_osw_from_main))
+    fat_osw_m, coords_osw_m = read_osw(
+        args.group, lst_sar_files_osw_from_main, dev=args.dev
     )
-    logger.info(" osw data : %s", fat_osw)
+    logger.info(
+        "Done reading osw files, fat_osw shape: %s", str(coords_osw_m["lon_osw"].shape)
+    )
+    logger.info(" osw data : %s", fat_osw_m)

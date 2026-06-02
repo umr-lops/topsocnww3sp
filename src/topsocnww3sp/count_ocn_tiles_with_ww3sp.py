@@ -13,19 +13,9 @@ import pandas as pd
 import xarray as xr
 from tqdm import tqdm
 
-from topsocnww3sp.utils import get_config
+from topsocnww3sp.utils import get_config, haversine
 
 logger = logging.getLogger(__name__)
-
-
-def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> np.ndarray:
-    """Calculate great circle distance in km."""
-    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-    a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-    c = 2 * np.arcsin(np.sqrt(a))
-    return c * 6371
 
 
 def parse_track_file(filepath: str) -> list[dict[str, typing.Any]]:
@@ -34,7 +24,7 @@ def parse_track_file(filepath: str) -> list[dict[str, typing.Any]]:
     logger.info("Reading track file: %s", filepath)
     path_obj = Path(filepath)
     try:
-        with path_obj.open() as f:
+        with path_obj.open(encoding="utf-8") as f:
             # Skip header line (unused)
             _ = f.readline()
             for i, line in enumerate(f):
@@ -166,7 +156,7 @@ def main() -> None:
         ww3_nc_lons = ds.longitude.to_numpy()
         ww3_nc_lats = ds.latitude.to_numpy()
         ww3_nc_times = pd.to_datetime(ds.time.to_numpy())
-    except Exception:
+    except (OSError, ValueError, KeyError, IndexError, RuntimeError):
         logger.exception("Failed to process NetCDF")
         return
 
@@ -176,7 +166,7 @@ def main() -> None:
     # 5. Write to Output File
     output_path = Path(args.output)
     logger.info("Writing detailed report to %s", output_path)
-    with output_path.open("w") as out:
+    with output_path.open("w", encoding="utf-8") as out:
         out.write("\n".join(summary_lines) + "\n\n")
         out.write("DETAILED DATA:\n")
         out.write(

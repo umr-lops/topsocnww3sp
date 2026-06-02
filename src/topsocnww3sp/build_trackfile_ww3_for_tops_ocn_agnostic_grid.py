@@ -18,6 +18,8 @@ import pandas as pd
 import xarray as xr
 from tqdm import tqdm
 
+from topsocnww3sp.utils import format_logs
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +59,7 @@ def _parse_single_osw(osw_file: Path) -> tuple[list[dict[str, Any]], bool]:
 
                 for lon, lat in zip(lons, lats, strict=False):
                     positions.append({"lon": lon, "lat": lat, "date": date})
-    except Exception:
+    except (OSError, ValueError, KeyError, IndexError, RuntimeError):
         logger.exception("Error processing %s: %s", osw_file, traceback.format_exc())
         flag_file_parsed = False
     return positions, flag_file_parsed
@@ -152,18 +154,13 @@ def entry_point_one_listing_of_safe() -> None:
     )
     args = parser.parse_args()
 
-    # Logging config
-    fmt = "%(asctime)s %(levelname)s %(filename)s(%(lineno)d) %(message)s"
-    level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=level, format=fmt, datefmt="%d/%m/%Y %H:%M:%S", force=True
-    )
+    format_logs(logging.getLogger(__name__), "debug" if args.verbose else "info")
 
     t0 = time.time()
 
     # Load listing using Path.open()
     listing_path = Path(args.listing_safe)
-    with listing_path.open() as f:
+    with listing_path.open(encoding="utf-8") as f:
         safes = [
             line.strip() for line in f if line.strip() and not line.startswith("#")
         ]

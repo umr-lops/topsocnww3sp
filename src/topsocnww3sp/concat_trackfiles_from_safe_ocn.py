@@ -67,7 +67,7 @@ def concatenate_trackfiles(input_dir: str, output_file: str) -> None:
     # 3. Save to output
     output_path = Path(output_file)
     logger.info("Saving to %s", output_path)
-    with output_path.open("w") as f:
+    with output_path.open("w", encoding="utf-8") as f:
         f.write("WAVEWATCH III TRACK LOCATIONS DATA \n")
         # Write each row with proper formatting
         for _, row in combined_df.iterrows():

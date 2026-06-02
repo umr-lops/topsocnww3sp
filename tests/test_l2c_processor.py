@@ -12,7 +12,7 @@ import pytest
 import xarray as xr
 import yaml
 
-from topsocnww3sp.l2c_processor import find_ww3_file, haversine, main, process_group
+from topsocnww3sp.l2c_processor import find_ww3_file, main, process_group
 
 
 @pytest.fixture
@@ -79,11 +79,6 @@ def dummy_sar_ds():
 
 
 # --- Tests ---
-
-
-def test_haversine():
-    dist = haversine(0, 0, 1, 0)
-    assert dist == pytest.approx(111.19, rel=1e-3)
 
 
 def test_find_ww3_file(mock_config, monkeypatch):

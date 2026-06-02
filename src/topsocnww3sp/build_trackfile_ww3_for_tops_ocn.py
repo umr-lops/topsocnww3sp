@@ -158,7 +158,7 @@ def entry_point_one_safe() -> None:
         "--outputdir", required=True, help="directory where to store output"
     )
     parser.add_argument(
-        "--OCNSAFE", required=True, help="directory SAFE where to find OCN files"
+        "--OCNSAFE", required=True, help="SAFE directory where to find OCN files used as input"
     )
     args = parser.parse_args()
 
@@ -179,7 +179,7 @@ def entry_point_one_listing_of_safe() -> None:
         "--outputdir", required=True, help="directory where to store output"
     )
     parser.add_argument(
-        "--listing-safe", required=True, help="path of a listing of OCN SAFE files"
+        "--listing-safe", required=True, help="full path of a listing of OCN SAFE files"
     )
     args = parser.parse_args()
 

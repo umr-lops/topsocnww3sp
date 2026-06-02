@@ -43,7 +43,7 @@ def resolve_file_list(input_paths: list[str]) -> list[Path]:
             if not path_obj.exists():
                 logger.error("Listing file not found: %s", path_str)
                 continue
-            with path_obj.open() as f:
+            with path_obj.open(encoding="utf-8") as f:
                 files_from_txt = [
                     Path(line.strip())
                     for line in f
