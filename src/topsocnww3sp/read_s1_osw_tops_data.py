@@ -48,16 +48,16 @@ def read_osw(
     if dev:
         lst_sar_files_osw = lst_sar_files_osw[:2]
         logger.info("Running in development mode, only processing the first 2 files")
-    
+
     for ii in tqdm(range(len(lst_sar_files_osw))):
         onesarfileocn = lst_sar_files_osw[ii]
         dsosw = xr.open_dataset(onesarfileocn, group=group)
-        
+
         # Preserve original attributes from the source file
         # The source file contains important metadata (title, institution, etc.)
         # We add source_file for provenance
         dsosw.attrs["source_file"] = clean_source_path(onesarfileocn)
-        
+
         coords_osw["lon_osw"] = np.hstack(
             [coords_osw["lon_osw"], dsosw["oswLon"].squeeze().to_numpy().ravel()]
         )
@@ -72,20 +72,20 @@ def read_osw(
             cpt_subswath_concat += 1
         else:
             cpt_subswath_discard += 1
-    
+
     logger.info(
         "Number of subswath concatenated: %d, discarded because only land: %d",
         cpt_subswath_concat,
         cpt_subswath_discard,
     )
     logger.debug("min_kybinsize %d", min_kybinsize)
-    
+
     # List comprehension for performance
     concatosw2 = [
         oo.isel({"oswKyBinSize": slice(0, min_kybinsize)}) for oo in concatosw
     ]
     fat_osw = xr.concat(concatosw2, dim="subswath", join="outer")
-    
+
     return fat_osw, coords_osw
 
 

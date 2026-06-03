@@ -2,14 +2,223 @@
 
 [![Actions Status][actions-badge]][actions-link]
 [![Documentation Status][rtd-badge]][rtd-link]
-
 [![PyPI version][pypi-version]][pypi-link]
 [![Conda-Forge][conda-badge]][conda-link]
 [![PyPI platforms][pypi-platforms]][pypi-link]
-
 [![GitHub Discussion][github-discussions-badge]][github-discussions-link]
-
 [![Coverage][coverage-badge]][coverage-link]
+
+Python library to co-localize Sentinel-1 OCN Level-2 OSW (Ocean Swell Wave)
+products with WW3 (WaveWatch III) spectral data.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+  - [Command Line Interface](#command-line-interface)
+  - [Modes of Operation](#modes-of-operation)
+  - [Output Structure](#output-structure)
+- [Visualization Tools](#visualization-tools)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [License](#license)
+- [Citation](#citation)
+- [Acknowledgments](#acknowledgments)
+
+## Overview
+
+The `topsocnww3sp` package provides tools to associate Sentinel-1 OSW (Ocean
+Swell Wave) data with WW3 (WaveWatch III) wave model spectra. The
+co-localization can be performed using different matching strategies depending
+on the scientific use case.
+
+## Features
+
+- **Multiple matching modes**:
+  - `1to1`: One-to-one matching (closest WW3 point per SAR tile)
+  - `unique`: Multiple SAR tiles can share the same WW3 point (pointer array)
+  - `many`: Many-to-many mapping table (all matches within radius)
+  - `lasso`: All WW3 points within buffered SAR subswath footprint
+
+- **Multi-grid WW3 support**: Handles IRI configuration with Arctic, Antarctic
+  and mid-latitude grids
+
+- **CF-compliant NetCDF output**: L2C products with full metadata and provenance
+  tracking
+
+- **Interactive visualization**: GIF animations and static maps for validation
+
+- **SAR SAFE processing**: Process entire SAFE directories (all subswaths
+  IW1/IW2/IW3 or EW1..EW5) in one run
+
+## Installation
+
+### From PyPI
+
+```bash
+pip install topsocnww3sp
+```
+
+### From Conda-Forge
+
+```bash
+conda install -c conda-forge topsocnww3sp
+```
+
+### For development
+
+```bash
+git clone https://github.com/umr-lops/topsocnww3sp.git
+cd topsocnww3sp
+pip install -e ".[dev]"
+```
+
+## Configuration
+
+Create a `config.yml` file with the following structure:
+
+```yaml
+# WW3 data directory
+directory_ww3spectra_output: /path/to/ww3/data
+
+# Temporal and spatial thresholds
+TIME_THRESHOLD_MINUTES: 30
+DISTANCE_THRESHOLD_KM: 20
+BUFFER_DEG: 0.1
+
+# Product version (will be appended to output filename)
+product_version: "v1.0"
+
+# Multi-grid WW3 configuration (for IRI grids)
+ww3_grids:
+  arctic:
+    pattern: "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"
+  antarctic:
+    pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
+  midlatitude:
+    pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+```
+
+## Usage
+
+### Command Line Interface
+
+#### SAFE directory processing (all subswaths)
+
+```bash
+procl2c \
+  --ocn-safe /path/to/S1A_IW_OCN__2SDV_*.SAFE \
+  --config config.yml \
+  --mode lasso \
+  --output-dir ./output \
+  --overwrite
+```
+
+### Modes of Operation
+
+| Mode     | Description                                             | Output Structure                                |
+| -------- | ------------------------------------------------------- | ----------------------------------------------- |
+| `1to1`   | Closest WW3 point per SAR tile                          | `WW3_{group}` with dimension `all_tiles`        |
+| `unique` | Multiple SAR tiles can share WW3 point                  | Pointer array in `MATCH_MAP`                    |
+| `many`   | All WW3 points within distance threshold                | Pair table with `sar_index` and `ww3_index`     |
+| `lasso`  | All WW3 points within buffered footprint. Default mode. | Single `WW3` group per subswath, no `MATCH_MAP` |
+
+### Output Structure
+
+For a SAFE directory, the output files are organized as:
+
+```
+output/
+└── YYYY/
+    └── MM/
+        └── DD/
+            └── SAFE_NAME/
+                ├── s1a-iw1-osw-..._v1.0.nc
+                ├── s1a-iw2-osw-..._v1.0.nc
+                └── s1a-iw3-osw-..._v1.0.nc
+```
+
+Each output NetCDF file contains:
+
+- `SAR_intraburst` group: Original SAR OSW data
+- `SAR_interburst` group: Interburst SAR data
+- `WW3` group: Filtered WW3 spectra (lasso mode)
+- `MATCH_MAP` group: Association table (other modes)
+
+## Visualization Tools
+
+### Interactive GIF animation
+
+```bash
+python scripts/l2c_map_gif.py \
+  --l2c-file /path/to/L2C_lasso.nc \
+  --tile 10 \
+  --output colocation.gif
+```
+
+### Static maps for SAFE validation
+
+```bash
+python scripts/l2c_map_safe.py \
+  --safe-dir /path/to/SAFE \
+  --output-dir ./maps \
+  --tile-zoom 8
+```
+
+Generated maps:
+
+- Map 1: SAR intraburst tiles only
+- Map 2: SAR intraburst + interburst tiles
+- Map 3: SAR tiles + WW3 spectra positions
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=topsocnww3sp
+
+# Run specific test
+pytest tests/test_l2c_processor.py
+```
+
+## Contributing
+
+Contributions are welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Run pre-commit hooks: `pre-commit run --all-files`
+4. Submit a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
+for details.
+
+## Citation
+
+If you use this software in your research, please cite:
+
+```bibtex
+@software{topsocnww3sp,
+  author = {Grouazel, Antoine},
+  title = {topsocnww3sp: Sentinel-1 OSW and WW3 co-localization},
+  year = {2024},
+  url = {https://github.com/umr-lops/topsocnww3sp}
+}
+```
+
+## Acknowledgments
+
+- Ifremer / LOPS laboratory
+- ESA for Sentinel-1 data
+- WW3 model developers
 
 <!-- SPHINX-START -->
 
@@ -29,55 +238,3 @@
 [coverage-link]:            https://codecov.io/github/umr-lops/topsocnww3sp
 
 <!-- prettier-ignore-end -->
-
-association rules between S1-OSW data / daily trackfiles / monthly WW3 field
-output / monthly WW3 spectra files example: all these SAFE: ls
-/home/datawork-cersat-public/cache/project/mpc-sentinel1/data/esa/sentinel-1a/L2/IW/S1A_IW_OCN**2S/2025/097/
-S1A_IW_OCN**2SDV_20250407T032436_20250407T032501_058645_0742BF_C7D8.SAFE
-S1A_IW_OCN**2SDV_20250407T114432_20250407T114501_058650_0742FD_EF9F.SAFE
-S1A_IW_OCN**2SDV_20250407T213854_20250407T213923_058656_074336_D8A0.SAFE
-S1A_IW_OCN**2SDV_20250407T032501_20250407T032526_058645_0742BF_165F.SAFE
-S1A_IW_OCN**2SDV_20250407T114501_20250407T114526_058650_0742FD_8406.SAFE
-S1A_IW_OCN**2SDV_20250407T213923_20250407T213948_058656_074336_EEDA.SAFE
-S1A_IW_OCN**2SDV_20250407T032526_20250407T032551_058645_0742BF_B993.SAFE
-S1A_IW_OCN\_\_2SDV_20250407T114526_20250407T114551_058650_0742FD_C9BA.SAFE
-
-A SAFE contains netcdf files (.nc), for example:
-s1a-iw1-osw-hh-20260405t102207-20260405t102237-063943-080b17-001.nc
-s1a-iw3-osw-hh-20260405t102209-20260405t102239-063943-080b17-003.nc
-s1a-iw2-osw-hh-20260405t102208-20260405t102238-063943-080b17-002.nc
-s1a-iw-ocn-hh-20260405t102207-20260405t102237-063943-080B17-001.nc
-
-a daily trackfile is named like this: trackfile_s1_iw_20260204.txt or
-trackfile_s1_ew_20260204.txt it contains both intra and inter burst tiles. it
-contains all the units together S1A+S1C+S1D for instance. The lines are ordered
-in chronological order. Simultaneous acquisitions can occurred with the
-different Sentinel-1 unit.
-
-Example of trackfile content: WAVEWATCH III TRACK LOCATIONS DATA 20250407 020615
--121.93000 35.00000 20250407 020615 -121.81000 35.01000 20250407 020615
--121.69000 35.03000 20250407 020615 -121.57000 35.05000 20250407 020615
--121.46000 35.06000 20250407 020615 -121.34000 35.08000 20250407 020615
--122.22000 35.13000 20250407 020615 -122.09000 35.14000 20250407 020615
--121.97000 35.16000 20250407 020615 -121.85000 35.18000 20250407 020615
--121.73000 35.20000 20250407 020615 -121.61000 35.21000 20250407 020615
--121.49000 35.23000 20250407 020615 -121.38000 35.25000 20250407 020615
--122.25000 35.29000 20250407 020615 -122.13000 35.31000 20250407 020615
--122.01000 35.33000 20250407 020615 -121.88000 35.35000 20250407 020615
--121.76000 35.36000 20250407 020615 -121.65000 35.38000 20250407 020615
--121.53000 35.40000 20250407 020615 -121.41000 35.41000 20250407 020616
--120.97000 33.83000 20250407 020616 -120.86000 33.84000 20250407 020616
--120.75000 33.86000 20250407 020616 -120.64000 33.87000 20250407 020616
--120.54000 33.89000 20250407 020616 -120.43000 33.90000 20250407 020616
--120.32000 33.92000 20250407 020616 -121.01000 33.99000 20250407 020616
--120.89000 34.01000 20250407 020616 -120.79000 34.02000 20250407 020616
--120.68000 34.04000 20250407 020616 -120.57000 34.05000 20250407 020616
--120.46000 34.07000 20250407 020616 -120.36000 34.08000 20250407 020616
--121.04000 34.16000 20250407 020616 -120.93000 34.17000 20250407 020616
--120.82000 34.19000
-
-associated WW3 field output is store in:
-/scale/project/wave/WW3/PROJECT/IRI/IRI_15KM_01/012504/IRIGLOB-7M/2025-04-07T00_2025-04-08T00/FIELD_NC/WW3-IRIGLOB-7M_202504.nc
-
-associated WW3 spectra nc file is tore in:
-/scale/project/wave/WW3/PROJECT/IRI/IRI_15KM_01/012504/IRIGLOB-7M/2025-04-07T00_2025-04-08T00/TRACK_NC/WW3-IRIGLOB-7M_202504_trck.nc

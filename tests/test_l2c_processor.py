@@ -4,13 +4,13 @@
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
-import xarray as xr
 import xarray
+import xarray as xr
 import yaml
 
 from topsocnww3sp.l2c_processor import (
@@ -156,7 +156,10 @@ def dummy_sar_ds_with_corners():
 @pytest.fixture
 def mock_safe_directory(tmp_path):
     """Create a mock SAFE directory with OSW files for testing."""
-    safe_dir = tmp_path / "S1A_IW_OCN__2SDV_20220107T062432_20220107T062457_041351_04EA80_F9CD.SAFE"
+    safe_dir = (
+        tmp_path
+        / "S1A_IW_OCN__2SDV_20220107T062432_20220107T062457_041351_04EA80_F9CD.SAFE"
+    )
     measurement_dir = safe_dir / "measurement"
     measurement_dir.mkdir(parents=True)
 
@@ -177,6 +180,7 @@ def mock_safe_directory(tmp_path):
 
 def test_find_ww3_file(mock_config, monkeypatch):
     """Test find_ww3_file with a mock returning a file."""
+
     def mock_rglob(*_):
         return ["/fake/path/ww3/WW3_202201_trck.nc"]
 
@@ -189,6 +193,7 @@ def test_find_ww3_file(mock_config, monkeypatch):
 
 def test_find_ww3_file_not_found(mock_config, monkeypatch):
     """Test find_ww3_file when no file is found."""
+
     def mock_rglob_empty(*_):
         return []
 
@@ -225,12 +230,14 @@ def test_list_osw_files_in_safe_no_osw_files(tmp_path):
     measurement_dir = safe_dir / "measurement"
     measurement_dir.mkdir(parents=True)
 
-    with pytest.raises(FileNotFoundError, match="No OSW .nc files found"):
+    with pytest.raises(FileNotFoundError, match=r"No OSW \.nc files found"):
         list_osw_files_in_safe(safe_dir)
 
 
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many"])
-def test_process_group_modes(mode, dummy_sar_ds_with_corners, dummy_ww3_ds, mock_config):
+def test_process_group_modes(
+    mode, dummy_sar_ds_with_corners, dummy_ww3_ds, mock_config
+):
     """Test process_group with different modes."""
     sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
 
@@ -239,7 +246,12 @@ def test_process_group_modes(mode, dummy_sar_ds_with_corners, dummy_ww3_ds, mock
         return_value=(dummy_sar_ds_with_corners, None),
     ):
         ds_sar, ds_ww3, ds_match = process_group(
-            Path("fake_osw.nc"), dummy_ww3_ds, "intraburst", mock_config, sar_start, mode
+            Path("fake_osw.nc"),
+            dummy_ww3_ds,
+            "intraburst",
+            mock_config,
+            sar_start,
+            mode,
         )
 
     assert ds_sar is not None
@@ -273,7 +285,11 @@ def test_process_lasso_group_success(
         return_value=(dummy_sar_ds_with_corners, None),
     ):
         ds_out = process_lasso_group(
-            Path("fake_osw.nc"), dummy_ww3_ds_sparse, "intraburst", mock_config, sar_start
+            Path("fake_osw.nc"),
+            dummy_ww3_ds_sparse,
+            "intraburst",
+            mock_config,
+            sar_start,
         )
 
     assert ds_out is not None
@@ -344,7 +360,11 @@ def test_ww3_grid_provenance_presence(
 
         if mode == "lasso":
             ds_out = process_lasso_group(
-                Path("fake_osw.nc"), dummy_ww3_ds_sparse, "intraburst", mock_config, sar_start
+                Path("fake_osw.nc"),
+                dummy_ww3_ds_sparse,
+                "intraburst",
+                mock_config,
+                sar_start,
             )
             if ds_out is not None:
                 if "ww3_grid_provenance" not in ds_out.variables:
@@ -407,7 +427,9 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
         "ww3_grids": {
             "arctic": {"pattern": "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"},
             "antarctic": {"pattern": "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"},
-            "midlatitude": {"pattern": "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"},
+            "midlatitude": {
+                "pattern": "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+            },
         },
     }
 
@@ -439,11 +461,20 @@ def test_main_integration_lasso_with_safe(
 ):
     """Test main entry point with lasso mode and SAFE directory."""
     # Créer des chemins mockés pour les fichiers OSW
-    safe_dir = tmp_path / "S1A_IW_OCN__2SDV_20220107T062432_20220107T062457_041351_04EA80_F9CD.SAFE"
+    safe_dir = (
+        tmp_path
+        / "S1A_IW_OCN__2SDV_20220107T062432_20220107T062457_041351_04EA80_F9CD.SAFE"
+    )
     osw_paths = [
-        safe_dir / "measurement" / "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc",
-        safe_dir / "measurement" / "s1a-iw2-osw-vv-20220107t062430-20220107t062501-041351-04ea80-002.nc",
-        safe_dir / "measurement" / "s1a-iw3-osw-vv-20220107t062431-20220107t062502-041351-04ea80-003.nc",
+        safe_dir
+        / "measurement"
+        / "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc",
+        safe_dir
+        / "measurement"
+        / "s1a-iw2-osw-vv-20220107t062430-20220107t062501-041351-04ea80-002.nc",
+        safe_dir
+        / "measurement"
+        / "s1a-iw3-osw-vv-20220107t062431-20220107t062502-041351-04ea80-003.nc",
     ]
 
     config_file = tmp_path / "config.yml"
@@ -491,8 +522,8 @@ directory_ww3spectra_output: /fake/path
     saved_paths = []
     written_files = set()
 
-    def mock_to_netcdf(self, path, mode="w", group=None, **kwargs):
-        # Ne compter qu'une fois par fichier (quand mode="w" ou premier appel)
+    def mock_to_netcdf(_, path, _mode="w", _group=None, **_kwargs):
+        """Mock to_netcdf method - accepts all standard arguments."""
         if path not in written_files:
             written_files.add(path)
             saved_paths.append(path)

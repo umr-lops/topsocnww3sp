@@ -57,17 +57,21 @@ def list_osw_files_in_safe(safe_path: Path) -> list[Path]:
     """
     measurement_dir = safe_path / "measurement"
     if not measurement_dir.exists():
-        raise FileNotFoundError(f"Measurement directory not found: {measurement_dir}")
+        error_msg = f"Measurement directory not found: {measurement_dir}"
+        raise FileNotFoundError(error_msg)
 
     osw_files = list(measurement_dir.glob("*osw*.nc"))
 
     if not osw_files:
-        raise FileNotFoundError(f"No OSW .nc files found in {measurement_dir}")
+        error_msg = f"No OSW .nc files found in {measurement_dir}"
+        raise FileNotFoundError(error_msg)
 
     # Sort to ensure consistent order (IW1, IW2, IW3 or EW1, EW2, ...)
     osw_files.sort()
 
-    logger.info("Found %d OSW files in SAFE: %s", len(osw_files), [f.name for f in osw_files])
+    logger.info(
+        "Found %d OSW files in SAFE: %s", len(osw_files), [f.name for f in osw_files]
+    )
     return osw_files
 
 
@@ -337,7 +341,7 @@ def create_global_attributes(
     mission = parts[0].upper() if len(parts) > 0 else "UNKNOWN"
     subswath = parts[1].upper() if len(parts) > 1 else "UNKNOWN"
     polarization = parts[2].upper() if len(parts) > 2 else "UNKNOWN"
-    now_str = datetime.now().isoformat()
+    now_str = datetime.now(tz=timezone.utc).isoformat()
 
     return {
         "Conventions": "CF-1.8",
@@ -407,8 +411,9 @@ def main() -> None:
     """Main function to process SAR and WW3 data for colocalization."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--ocn-safe", required=True,
-        help="path to SAFE directory containing OSW .nc files (IW1, IW2, IW3 or EW1..EW5)"
+        "--ocn-safe",
+        required=True,
+        help="path to SAFE directory containing OSW .nc files (IW1, IW2, IW3 or EW1..EW5)",
     )
     parser.add_argument(
         "--ww3-file",
@@ -457,7 +462,9 @@ def main() -> None:
     first_osw = osw_files[0]
     fname = first_osw.name
     parts = fname.split("-")
-    sar_start = datetime.strptime(parts[4], "%Y%m%dt%H%M%S").replace(tzinfo=timezone.utc)
+    sar_start = datetime.strptime(parts[4], "%Y%m%dt%H%M%S").replace(
+        tzinfo=timezone.utc
+    )
 
     product_version = config.get("product_version", "v0.1")
     safe_name = safe_path.name
@@ -500,7 +507,9 @@ def main() -> None:
         if output_path.exists() and args.overwrite:
             output_path.unlink()
 
-        global_attrs = create_global_attributes(osw_file.name, product_version, args.mode)
+        global_attrs = create_global_attributes(
+            osw_file.name, product_version, args.mode
+        )
 
         if args.mode == "lasso":
             sar_groups = []
@@ -535,7 +544,9 @@ def main() -> None:
             match_groups = []
 
             for g in groups:
-                result = process_group(osw_file, ds_ww3, g, config, sar_start, args.mode)
+                result = process_group(
+                    osw_file, ds_ww3, g, config, sar_start, args.mode
+                )
                 d_sar, d_ww3, d_match = result
                 if d_sar is not None and d_ww3 is not None and d_match is not None:
                     sar_groups.append((f"SAR_{g}", d_sar))
@@ -543,7 +554,9 @@ def main() -> None:
                     match_groups.append((f"MATCH_MAP_{g}", d_match))
 
             if sar_groups:
-                write_output_file(output_path, global_attrs, sar_groups, ww3_groups, match_groups)
+                write_output_file(
+                    output_path, global_attrs, sar_groups, ww3_groups, match_groups
+                )
                 logger.info("Successfully wrote %s", output_path)
             else:
                 logger.warning("No data extracted for %s", subswath_name)
