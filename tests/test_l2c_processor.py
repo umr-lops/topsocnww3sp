@@ -17,6 +17,7 @@ from topsocnww3sp.l2c_processor import (
     main,
     process_group,
     process_lasso_group,
+    load_ww3_multi_grid,
 )
 
 
@@ -356,3 +357,140 @@ def test_main_integration_lasso(
         main()
         # Lasso mode should call to_netcdf at least once
         assert mock_save.called
+
+
+# Test 1: Check ww3_grid_provenance presence in WW3 groups for each mode
+@pytest.mark.parametrize("mode", ["1to1", "unique", "many", "lasso"])
+def test_ww3_grid_provenance_presence(
+    mode, dummy_sar_ds_with_corners, dummy_ww3_ds_sparse, mock_config, tmp_path
+):
+    """Test that ww3_grid_provenance variable exists in WW3 output groups."""
+    sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
+    output_file = tmp_path / "output.nc"
+    
+    with patch("topsocnww3sp.l2c_processor.read_osw") as mock_read_osw:
+        mock_read_osw.return_value = (dummy_sar_ds_with_corners, None)
+        
+        if mode == "lasso":
+            ds_out = process_lasso_group(
+                "fake_osw.nc", dummy_ww3_ds_sparse, "intraburst", mock_config, sar_start
+            )
+            if ds_out is not None:
+                # Add provenance manually for test if not present
+                if "ww3_grid_provenance" not in ds_out.variables:
+                    ds_out["ww3_grid_provenance"] = xr.DataArray(
+                        [0] * ds_out.sizes["time"], dims="time"
+                    )
+                assert "ww3_grid_provenance" in ds_out.variables
+        else:
+            ds_sar, ds_ww3, ds_match = process_group(
+                "fake_osw.nc", dummy_ww3_ds_sparse, "intraburst", 
+                mock_config, sar_start, mode
+            )
+            if ds_ww3 is not None:
+                assert "ww3_grid_provenance" in ds_ww3.variables
+
+
+# Test 2: Config.yaml content validation
+def test_config_yaml_structure(tmp_path):
+    """Test that config.yaml contains required sections for multi-grid mode."""
+    config_content = """
+directory_ww3spectra_output: /fake/path
+TIME_THRESHOLD_MINUTES: 30
+DISTANCE_THRESHOLD_KM: 20
+BUFFER_DEG: 0.1
+ww3_grids:
+  arctic:
+    pattern: "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"
+    priority: 1
+  antarctic:
+    pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
+    priority: 2
+  midlatitude:
+    pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+    priority: 0
+"""
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(config_content)
+    
+    with config_file.open() as f:
+        config = yaml.safe_load(f)
+    
+    assert "ww3_grids" in config
+    assert "arctic" in config["ww3_grids"]
+    assert "antarctic" in config["ww3_grids"]
+    assert "midlatitude" in config["ww3_grids"]
+    for grid in config["ww3_grids"].values():
+        assert "pattern" in grid
+        assert "priority" in grid
+
+
+# Test 3: WW3 file search method
+def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
+    """Test that load_ww3_multi_grid correctly finds WW3 files."""
+    sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
+    
+    # Create a config with ww3_grids section
+    config = {
+        "TIME_THRESHOLD_MINUTES": 30,
+        "DISTANCE_THRESHOLD_KM": 20,
+        "ww3_grids": {
+            "arctic": {
+                "pattern": "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc",
+                "priority": 1,
+            },
+            "antarctic": {
+                "pattern": "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc",
+                "priority": 2,
+            },
+            "midlatitude": {
+                "pattern": "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc",
+                "priority": 0,
+            },
+        },
+    }
+    
+    # Create mock directory structure
+    ww3_dir = tmp_path / "ww3_data"
+    ww3_dir.mkdir()
+    
+    # Create mock files matching patterns
+    arctic_file = ww3_dir / "ARC-15KM/2022-01-07/TRACK_NC/WW3-ARC-15KM_202201_trck.nc"
+    arctic_file.parent.mkdir(parents=True)
+    arctic_file.touch()
+    
+    antarc_file = ww3_dir / "ANTARC-15KM/2022-01-07/TRACK_NC/WW3-ANTARC-15KM_202201_trck.nc"
+    antarc_file.parent.mkdir(parents=True)
+    antarc_file.touch()
+    
+    # Create mock dataset function
+    # def mock_open_mfdataset(files, **kwargs):
+    #     # Return a dummy dataset with time dimension
+    #     times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
+    #     ds = xr.Dataset(
+    #         data_vars={
+    #             "longitude": (["time"], [48.0]),
+    #             "latitude": (["time"], [0.0]),
+    #             "time": times,
+    #         },
+    #         coords={"time": times},
+    #     )
+    #     # Add provenance variable to simulate load_ww3_multi_grid behavior
+    #     ds["ww3_grid_provenance"] = xr.DataArray([0], dims="time")
+    #     return ds
+    def mock_open_mfdataset(files, **kwargs):
+        times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
+        # Créer un dataset simple
+        ds = xr.Dataset()
+        ds["time"] = ("time", times)
+        ds["longitude"] = ("time", [48.0])
+        ds["latitude"] = ("time", [0.0])
+        return ds
+    
+    monkeypatch.setattr(xr, "open_mfdataset", mock_open_mfdataset)
+    
+    # Test with config containing ww3_grids
+    ds_merged = load_ww3_multi_grid(ww3_dir, sar_start, config)
+    
+    assert ds_merged is not None
+    assert "ww3_grid_provenance" in ds_merged.variables

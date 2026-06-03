@@ -6,6 +6,12 @@ from pathlib import Path
 
 import numpy as np
 import yaml
+import xarray as xr
+from datetime import datetime, timedelta, timezone
+from typing import Any
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 def get_config(path_config: str | Path | None = None) -> dict:
@@ -70,3 +76,83 @@ def format_logs(logger: logging.Logger, level: str) -> logging.Logger:
     for handler in logger.handlers:
         handler.setFormatter(formatter)
     return logger
+
+
+
+
+def load_ww3_multi_grid(
+    ww3_dir: Path, sar_start: datetime, config: dict[str, Any]
+) -> xr.Dataset:
+    """Load and merge WW3 data from multiple grids (IRI configuration).
+
+    Args:
+        ww3_dir: Directory containing WW3 grid subdirectories
+        sar_start: SAR acquisition time for temporal filtering
+        config: Configuration dictionary with ww3_grids patterns
+
+    Returns:
+        Merged xarray.Dataset with all available WW3 grids
+    """
+    if "ww3_grids" not in config:
+        raise ValueError("Missing 'ww3_grids' configuration for multi-grid mode")
+
+    t_thresh = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
+    t_sar = pd.Timestamp(sar_start).tz_localize(None)
+    datasets = []
+    grid_names_used = []
+
+    # Build flag meaning string once
+    flag_meaning_str = ", ".join([name for name in config["ww3_grids"].keys()])
+
+    for grid_name, grid_config in config["ww3_grids"].items():
+        # Build pattern with year
+        year_str = sar_start.strftime("%Y")
+        pattern = grid_config["pattern"].replace("YYYY", year_str)
+        logger.debug("Looking for WW3 files in %s with pattern %s", ww3_dir, pattern)
+        files = list(ww3_dir.glob(pattern))
+
+        if not files:
+            logger.debug("No files found for grid %s with pattern %s", grid_name, pattern)
+            continue
+
+        # Load and concatenate files for this grid
+        ds_grid = xr.open_mfdataset(files, combine="nested", concat_dim="time")
+        ww3_times = pd.to_datetime(ds_grid.time.to_numpy())
+
+        # Temporal filter
+        t_mask = (ww3_times >= t_sar - t_thresh) & (ww3_times <= t_sar + t_thresh)
+        if not np.any(t_mask):
+            logger.debug("No temporal match for grid %s", grid_name)
+            continue
+
+        ds_filtered = ds_grid.isel(time=t_mask)
+
+        # Add provenance variable with integer code for each grid
+        # Use an integer code (0, 1, 2, ...) for each grid
+        grid_code = list(config["ww3_grids"].keys()).index(grid_name)
+        explicite_comment = "0=arctic, 1=antarctic, 2=midlatitude" 
+        provenance = xr.DataArray(
+            np.full(ds_filtered.sizes["time"], grid_code),
+            dims="time",
+            attrs={
+                "long_name": "WW3 grid provenance",
+                "flag_meanings": flag_meaning_str,
+                "flag_values": " ".join([str(i) for i in range(len(config["ww3_grids"]))]),
+                "comment": explicite_comment,
+            },
+        )
+        ds_filtered["ww3_grid_provenance"] = provenance
+        datasets.append(ds_filtered)
+        grid_names_used.append(grid_name)
+
+    if not datasets:
+        raise FileNotFoundError(f"No WW3 data found in {ww3_dir} for time window around {sar_start}")
+
+    # Merge all grids along time dimension
+    ds_merged = xr.concat(datasets, dim="time", join="inner")
+    logger.info("Merged %d WW3 grids, total %d time steps", len(datasets), ds_merged.sizes["time"])
+
+    # Add metadata about grids used
+    ds_merged.attrs["ww3_grids_merged"] = ", ".join(grid_names_used)
+
+    return ds_merged
