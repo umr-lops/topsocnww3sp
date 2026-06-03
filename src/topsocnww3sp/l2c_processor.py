@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import yaml
+from shapely.geometry import MultiPoint, Point
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
 from topsocnww3sp.utils import haversine
@@ -80,10 +81,17 @@ def process_group(
     ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
     valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
-    sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
-        all_tiles=np.arange(len(sar_flat.all_tiles))
-    )
-
+    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
+    #     all_tiles=np.arange(len(sar_flat.all_tiles))
+    # )
+    sar_flat = sar_flat.reset_index("tiles", drop=True)
+    if "subswath" in sar_flat.dims:
+        sar_flat = sar_flat.drop_vars("subswath")
+    if "all_tiles" in sar_flat.dims:
+        sar_flat = sar_flat.reset_index("all_tiles").assign_coords(
+            all_tiles=np.arange(len(sar_flat.all_tiles))
+        )
+    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath"])
     n_tiles = len(sar_flat.all_tiles)
 
     # 2. Temporal Filter WW3
@@ -209,6 +217,107 @@ def process_group(
     return ds_sar, ds_ww3_out, ds_match
 
 
+def process_lasso_group(
+    osw_path: str,
+    ds_ww3: xr.Dataset,
+    group_name: str,
+    config: dict[str, Any],
+    sar_start: datetime,
+) -> xr.Dataset | None:
+    """Lasso mode: extract WW3 points within buffered footprint of the SAR subswath."""
+    logger.info("--- Lasso Mode: %s ---", group_name)
+
+    # 1. Load SAR data
+    fat_osw, _ = read_osw(group_name, [Path(osw_path)])
+    if fat_osw is None or len(fat_osw.data_vars) == 0:
+        return None
+
+    # 2. Temporal filter on WW3
+    ww3_times = pd.to_datetime(ds_ww3.time.to_numpy())
+    t_sar = pd.Timestamp(sar_start).tz_localize(None)
+    t_thresh = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
+    t_mask = (ww3_times >= t_sar - t_thresh) & (ww3_times <= t_sar + t_thresh)
+    if not np.any(t_mask):
+        logger.info("No WW3 data within time window")
+        return None
+
+    ds_ww3_subset = ds_ww3.isel(time=t_mask)
+    ww3_lons = ds_ww3_subset.longitude.to_numpy()
+    ww3_lats = ds_ww3_subset.latitude.to_numpy()
+    buffer_deg = config.get("BUFFER_DEG", 0.1)
+
+    # 3. Extract corners - handle shape (subswath, corner, tiles)
+    lon_corners = fat_osw["oswLongitudeCorner"].to_numpy()
+    lat_corners = fat_osw["oswLatitudeCorner"].to_numpy()
+
+    logger.debug("Corner array shape:  %s", lon_corners.shape)
+
+    # Handle different possible structures
+    if lon_corners.ndim == 3:
+        # Shape (subswath, corners, tiles) or (corners, tiles, subswath)
+        if lon_corners.shape[0] == 1 and lon_corners.shape[1] == 4:
+            # Case: (1, 4, n_tiles) -> (4, n_tiles)
+            lon_corners = lon_corners[0]  # (4, n_tiles)
+            lat_corners = lat_corners[0]  # (4, n_tiles)
+
+        if lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
+            # Now (4, n_tiles) -> transpose to (n_tiles, 4)
+            lon_corners = lon_corners.T  # (n_tiles, 4)
+            lat_corners = lat_corners.T  # (n_tiles, 4)
+
+    elif lon_corners.ndim == 4:
+        # Shape (subswath, az, ra, corners)
+        lon_corners = lon_corners.reshape(-1, 4)  # (n_tiles, 4)
+        lat_corners = lat_corners.reshape(-1, 4)
+
+    elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
+        # Already (n_tiles, 4) - perfect
+        pass
+    else:
+        logger.error("Unexpected corner array shape: %s", lon_corners.shape)
+        return None
+
+    # Build all corners
+    all_corners = [
+        (float(lon_corners[i, k]), float(lat_corners[i, k]))
+        for i in range(lon_corners.shape[0])
+        for k in range(4)
+    ]
+
+    if len(all_corners) < 3:
+        logger.warning("Less than 3 corner points, cannot build polygon")
+        return None
+
+    # Compute convex hull and buffer
+
+    points = [Point(lon, lat) for lon, lat in all_corners]
+    multipoint = MultiPoint(points)
+    hull = multipoint.convex_hull
+    buffered_polygon = hull.buffer(buffer_deg)
+
+    # Find WW3 points inside the polygon
+    spatial_mask = np.array(
+        [
+            buffered_polygon.contains(Point(float(lon), float(lat)))
+            for lon, lat in zip(ww3_lons, ww3_lats, strict=False)
+        ]
+    )
+
+    if not np.any(spatial_mask):
+        logger.info("No WW3 points inside the buffered subswath footprint")
+        return None
+
+    # Filter WW3 dataset
+    ds_ww3_filtered = ds_ww3_subset.isel(time=spatial_mask)
+
+    # Add metadata
+    ds_ww3_filtered.attrs["sar_file"] = str(Path(osw_path).name)
+    ds_ww3_filtered.attrs["buffer_deg"] = buffer_deg
+
+    logger.info("Selected %d WW3 points out of %d", np.sum(spatial_mask), len(ww3_lons))
+    return ds_ww3_filtered
+
+
 def main() -> None:
     """Main function to process SAR and WW3 data for colocalization."""
     parser = argparse.ArgumentParser()
@@ -227,15 +336,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["1to1", "unique", "many"],
-        default="1to1",
-        help="Matching mode: '1to1' (one WW3 per SAR), 'unique' (multiple SAR can share same WW3), or 'many' (all matches)",
-    )
-    parser.add_argument(
-        "--group",
-        choices=["intraburst", "interburst", "both"],
-        default="both",
-        help="Which group(s) to process: 'intraburst', 'interburst', or 'both' (default: both)",
+        choices=["1to1", "unique", "many", "lasso"],
+        default="lasso",
+        help="Matching mode: '1to1' (one WW3 per SAR), 'unique' (multiple SAR can share same WW3), or 'many' (all matches) or 'lasso' (all spectra within the footprint) [optional, default: lasso]",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
@@ -264,7 +367,7 @@ def main() -> None:
     output_name = fname.replace(".nc", f"_L2C_{args.mode}.nc")
 
     ds_ww3 = xr.open_dataset(ww3_path)
-    groups = ["intraburst", "interburst"] if args.group == "both" else [args.group]
+    groups = ["intraburst", "interburst"]
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -280,8 +383,40 @@ def main() -> None:
         )
         return
 
-    first_write = True
+    if args.mode == "lasso":
+        # For lasso mode, process WW3 only for the SAR first group (intraburst if both)
+        processed = False
+        for g in groups:
+            logger.info("Processing lasso for intraburst group")
+            fat_osw, _ = read_osw(g, [Path(args.osw_file)])
+            if fat_osw is not None:
+                if "tiles" in fat_osw.dims or "tiles" in fat_osw.coords:
+                    fat_osw_to_write = fat_osw.reset_index("tiles")
+                else:
+                    fat_osw_to_write = fat_osw
 
+                if not processed:
+                    # First write: create file with SAR group
+                    fat_osw_to_write.to_netcdf(output_path, group=f"SAR_{g}", mode="w")
+                    processed = True
+                else:
+                    # Subsequent groups: add only SAR (if needed) but skip WW3 duplication
+                    fat_osw_to_write.to_netcdf(output_path, group=f"SAR_{g}", mode="a")
+                    logger.info("Added SAR_%s without duplicating WW3 data", g)
+        ds_ww3_selected = process_lasso_group(
+            args.osw_file,
+            ds_ww3,
+            group_name="intraburst",
+            config=config,
+            sar_start=sar_start,
+        )
+        if ds_ww3_selected is not None:
+            ds_ww3_selected.to_netcdf(output_path, group="WW3", mode="a")
+            logger.info(" WW3 group added to the netcdf")
+        if not processed:
+            logger.info("No WW3 data extracted")
+        return
+    first_write = True
     for g in groups:
         result = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
         d_sar, d_ww3, d_match = result
