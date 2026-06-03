@@ -10,9 +10,9 @@ import pandas as pd
 import xarray as xr
 import yaml
 from shapely.geometry import MultiPoint, Point
-from topsocnww3sp.utils import haversine, load_ww3_multi_grid
-from topsocnww3sp.read_s1_osw_tops_data import read_osw
 
+from topsocnww3sp.read_s1_osw_tops_data import read_osw
+from topsocnww3sp.utils import haversine, load_ww3_multi_grid
 
 logger = logging.getLogger(__name__)
 
@@ -350,14 +350,16 @@ def main() -> None:
     args = parser.parse_args()
 
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
-    
+    logging.basicConfig(
+        level=log_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
     # Propager aux autres modules
     logging.getLogger("topsocnww3sp.utils").setLevel(log_level)
     logging.getLogger("topsocnww3sp.read_s1_osw_tops_data").setLevel(log_level)
-    
+
     # Récupérer le logger pour ce module
-    logger = logging.getLogger(__name__)
+    # logger = logging.getLogger(__name__)
 
     config_path = Path(args.config)
     with config_path.open(encoding="utf-8") as f:
@@ -378,8 +380,8 @@ def main() -> None:
         logger.info("Multi-grid mode: loading WW3 data from directory %s", ww3_path_obj)
         try:
             ds_ww3 = load_ww3_multi_grid(ww3_path_obj, sar_start, config)
-        except (FileNotFoundError, ValueError) as e:
-            logger.error("Failed to load WW3 multi-grid: %s", e)
+        except (FileNotFoundError, ValueError):
+            logger.exception("Failed to load WW3 multi-grid")
             return
     else:
         logger.info("Single-file mode: loading WW3 data from %s", ww3_path_obj)
@@ -393,7 +395,7 @@ def main() -> None:
     if output_path.exists() and not args.overwrite:
         logger.info("Output file %s already exists. Use --overwrite...", output_path)
         return
-    elif output_path.exists() and args.overwrite:
+    if output_path.exists() and args.overwrite:
         output_path.unlink()
 
     if args.mode == "lasso":

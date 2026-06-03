@@ -4,8 +4,6 @@ directory_ww3spectra_output: "/scale/project/wave/WW3/PROJECT/IRI/IRI_15KM_01/"
 DISTANCE_THRESHOLD_KM: 14
 TIME_THRESHOLD_MINUTES: 30
 
-
-
 # WW3 grid patterns - relative to ww3dir provided by user
 ww3_grids:
   arctic:

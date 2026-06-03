@@ -17,8 +17,8 @@ from topsocnww3sp.l2c_processor import (
     main,
     process_group,
     process_lasso_group,
-    load_ww3_multi_grid,
 )
+from topsocnww3sp.utils import load_ww3_multi_grid
 
 
 @pytest.fixture
@@ -362,15 +362,14 @@ def test_main_integration_lasso(
 # Test 1: Check ww3_grid_provenance presence in WW3 groups for each mode
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many", "lasso"])
 def test_ww3_grid_provenance_presence(
-    mode, dummy_sar_ds_with_corners, dummy_ww3_ds_sparse, mock_config, tmp_path
+    mode, dummy_sar_ds_with_corners, dummy_ww3_ds_sparse, mock_config
 ):
     """Test that ww3_grid_provenance variable exists in WW3 output groups."""
     sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
-    output_file = tmp_path / "output.nc"
-    
+
     with patch("topsocnww3sp.l2c_processor.read_osw") as mock_read_osw:
         mock_read_osw.return_value = (dummy_sar_ds_with_corners, None)
-        
+
         if mode == "lasso":
             ds_out = process_lasso_group(
                 "fake_osw.nc", dummy_ww3_ds_sparse, "intraburst", mock_config, sar_start
@@ -383,9 +382,13 @@ def test_ww3_grid_provenance_presence(
                     )
                 assert "ww3_grid_provenance" in ds_out.variables
         else:
-            ds_sar, ds_ww3, ds_match = process_group(
-                "fake_osw.nc", dummy_ww3_ds_sparse, "intraburst", 
-                mock_config, sar_start, mode
+            _, ds_ww3, _ = process_group(
+                "fake_osw.nc",
+                dummy_ww3_ds_sparse,
+                "intraburst",
+                mock_config,
+                sar_start,
+                mode,
             )
             if ds_ww3 is not None:
                 assert "ww3_grid_provenance" in ds_ww3.variables
@@ -412,10 +415,10 @@ ww3_grids:
 """
     config_file = tmp_path / "config.yml"
     config_file.write_text(config_content)
-    
+
     with config_file.open() as f:
         config = yaml.safe_load(f)
-    
+
     assert "ww3_grids" in config
     assert "arctic" in config["ww3_grids"]
     assert "antarctic" in config["ww3_grids"]
@@ -429,7 +432,7 @@ ww3_grids:
 def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
     """Test that load_ww3_multi_grid correctly finds WW3 files."""
     sar_start = datetime(2022, 1, 7, 6, 0, tzinfo=timezone.utc)
-    
+
     # Create a config with ww3_grids section
     config = {
         "TIME_THRESHOLD_MINUTES": 30,
@@ -449,20 +452,22 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
             },
         },
     }
-    
+
     # Create mock directory structure
     ww3_dir = tmp_path / "ww3_data"
     ww3_dir.mkdir()
-    
+
     # Create mock files matching patterns
     arctic_file = ww3_dir / "ARC-15KM/2022-01-07/TRACK_NC/WW3-ARC-15KM_202201_trck.nc"
     arctic_file.parent.mkdir(parents=True)
     arctic_file.touch()
-    
-    antarc_file = ww3_dir / "ANTARC-15KM/2022-01-07/TRACK_NC/WW3-ANTARC-15KM_202201_trck.nc"
+
+    antarc_file = (
+        ww3_dir / "ANTARC-15KM/2022-01-07/TRACK_NC/WW3-ANTARC-15KM_202201_trck.nc"
+    )
     antarc_file.parent.mkdir(parents=True)
     antarc_file.touch()
-    
+
     # Create mock dataset function
     # def mock_open_mfdataset(files, **kwargs):
     #     # Return a dummy dataset with time dimension
@@ -478,7 +483,7 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
     #     # Add provenance variable to simulate load_ww3_multi_grid behavior
     #     ds["ww3_grid_provenance"] = xr.DataArray([0], dims="time")
     #     return ds
-    def mock_open_mfdataset(files, **kwargs):
+    def mock_open_mfdataset(_, **__):
         times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
         # Créer un dataset simple
         ds = xr.Dataset()
@@ -486,11 +491,11 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
         ds["longitude"] = ("time", [48.0])
         ds["latitude"] = ("time", [0.0])
         return ds
-    
+
     monkeypatch.setattr(xr, "open_mfdataset", mock_open_mfdataset)
-    
+
     # Test with config containing ww3_grids
     ds_merged = load_ww3_multi_grid(ww3_dir, sar_start, config)
-    
+
     assert ds_merged is not None
     assert "ww3_grid_provenance" in ds_merged.variables

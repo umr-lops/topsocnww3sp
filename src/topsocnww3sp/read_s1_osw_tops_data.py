@@ -55,7 +55,7 @@ def read_osw(
     coords_osw["lat_osw"] = []
     fat_osw = None
     concatosw = []
-    logger.info("Processing group %s ))", group)
+    logger.debug("Processing group %s ", group)
     min_kybinsize = 200
     if dev:
         lst_sar_files_osw = lst_sar_files_osw[:2]
@@ -89,7 +89,7 @@ def read_osw(
         cpt_subswath_concat,
         cpt_subswath_discard,
     )
-    logger.info("min_kybinsize %d", min_kybinsize)
+    logger.debug("min_kybinsize %d", min_kybinsize)
     # Use list comprehension instead of for loop (PERF401)
     concatosw2 = [
         oo.isel({"oswKyBinSize": slice(0, min_kybinsize)}) for oo in concatosw
