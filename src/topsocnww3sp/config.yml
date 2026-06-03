@@ -3,3 +3,15 @@ directory_trackfiles: "/legacy/project/cersat/public/cache/project/mpc-sentinel1
 directory_ww3spectra_output: "/scale/project/wave/WW3/PROJECT/IRI/IRI_15KM_01/"
 DISTANCE_THRESHOLD_KM: 14
 TIME_THRESHOLD_MINUTES: 30
+
+# WW3 grid patterns - relative to ww3dir provided by user
+ww3_grids:
+  arctic:
+    pattern: "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"
+    name: "arctic"
+  antarctic:
+    pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
+    name: "antarctic"
+  midlatitude:
+    pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+    name: "midlatitude"

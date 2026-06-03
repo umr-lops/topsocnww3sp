@@ -12,11 +12,8 @@ import yaml
 from shapely.geometry import MultiPoint, Point
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
-from topsocnww3sp.utils import haversine
+from topsocnww3sp.utils import haversine, load_ww3_multi_grid
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -327,7 +324,7 @@ def main() -> None:
     parser.add_argument(
         "--ww3-file",
         default=None,
-        help="path of nc file containing WW3 spectra. If not provided, the script will search based on SAR time and config directory",
+        help="directory or path of nc file containing WW3 spectra. If not provided, the script will search based on SAR time and config directory",
     )
     parser.add_argument(
         "--config",
@@ -352,7 +349,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logger.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(
+        level=log_level, format="%(asctime)s - %(levelname)s - %(message)s"
+    )
+
+    # Propager aux autres modules
+    logging.getLogger("topsocnww3sp.utils").setLevel(log_level)
+    logging.getLogger("topsocnww3sp.read_s1_osw_tops_data").setLevel(log_level)
+
+    # Récupérer le logger pour ce module
+    # logger = logging.getLogger(__name__)
 
     config_path = Path(args.config)
     with config_path.open(encoding="utf-8") as f:
@@ -363,31 +370,39 @@ def main() -> None:
     sar_start = datetime.strptime(fname.split("-")[4], "%Y%m%dt%H%M%S").replace(
         tzinfo=timezone.utc
     )
-    ww3_path = args.ww3_file or find_ww3_file(sar_start, config)
+
     output_name = fname.replace(".nc", f"_L2C_{args.mode}.nc")
 
-    ds_ww3 = xr.open_dataset(ww3_path)
+    ww3_path = args.ww3_file or find_ww3_file(sar_start, config)
+    # Check if ww3_path is a file or directory for multi-grid mode
+    ww3_path_obj = Path(ww3_path)
+    if ww3_path_obj.is_dir():
+        logger.info("Multi-grid mode: loading WW3 data from directory %s", ww3_path_obj)
+        try:
+            ds_ww3 = load_ww3_multi_grid(ww3_path_obj, sar_start, config)
+        except (FileNotFoundError, ValueError):
+            logger.exception("Failed to load WW3 multi-grid")
+            return
+    else:
+        logger.info("Single-file mode: loading WW3 data from %s", ww3_path_obj)
+        ds_ww3 = xr.open_dataset(ww3_path_obj)
     groups = ["intraburst", "interburst"]
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / Path(output_name)
     logger.info("Output will be saved to: %s", output_path)
-    if output_path.exists():
-        output_path.unlink()
-
     if output_path.exists() and not args.overwrite:
-        logger.info(
-            "Output file %s already exists. Use --overwrite to allow overwriting.",
-            output_path,
-        )
+        logger.info("Output file %s already exists. Use --overwrite...", output_path)
         return
+    if output_path.exists() and args.overwrite:
+        output_path.unlink()
 
     if args.mode == "lasso":
         # For lasso mode, process WW3 only for the SAR first group (intraburst if both)
         processed = False
         for g in groups:
-            logger.info("Processing lasso for intraburst group")
+            logger.info("Processing lasso for %s group", g)
             fat_osw, _ = read_osw(g, [Path(args.osw_file)])
             if fat_osw is not None:
                 if "tiles" in fat_osw.dims or "tiles" in fat_osw.coords:

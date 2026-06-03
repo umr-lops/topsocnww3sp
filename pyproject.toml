@@ -143,6 +143,11 @@ ignore_missing_imports = true
 
 [tool.ruff]
 show-fixes = true
+extend-exclude = [
+    "src/topsocnww3sp/_version.py",
+    "src/topsocnww3sp/_version.pyi",
+    "docs/notebooks/*ipynb",
+]
 
 [tool.ruff.lint]
 extend-select = [
