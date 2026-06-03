@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+"""L2C processor for Sentinel-1 OSW and WW3 colocalization."""
+
 import argparse
+import importlib.metadata
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,8 +43,40 @@ def find_ww3_file(sar_time: datetime, config: dict[str, Any]) -> str:
     return str(found_files[0])
 
 
+def list_osw_files_in_safe(safe_path: Path) -> list[Path]:
+    """List all OSW .nc files in a SAFE directory.
+
+    Args:
+        safe_path: Path to the SAFE directory
+
+    Returns:
+        List of paths to OSW .nc files (one per subswath)
+
+    Raises:
+        FileNotFoundError: If measurement directory or OSW files not found
+    """
+    measurement_dir = safe_path / "measurement"
+    if not measurement_dir.exists():
+        error_msg = f"Measurement directory not found: {measurement_dir}"
+        raise FileNotFoundError(error_msg)
+
+    osw_files = list(measurement_dir.glob("*osw*.nc"))
+
+    if not osw_files:
+        error_msg = f"No OSW .nc files found in {measurement_dir}"
+        raise FileNotFoundError(error_msg)
+
+    # Sort to ensure consistent order (IW1, IW2, IW3 or EW1, EW2, ...)
+    osw_files.sort()
+
+    logger.info(
+        "Found %d OSW files in SAFE: %s", len(osw_files), [f.name for f in osw_files]
+    )
+    return osw_files
+
+
 def process_group(
-    osw_path: str,
+    osw_path: Path,
     ds_ww3: xr.Dataset,
     group_name: str,
     config: dict[str, Any],
@@ -64,8 +99,7 @@ def process_group(
     logger.info("--- Processing Group: %s [Mode: %s] ---", group_name, mode)
 
     # 1. Load and Flatten SAR
-    # read_osw is not yet typed, silence mypy
-    fat_osw, _ = read_osw(group_name, [Path(osw_path)])
+    fat_osw, _ = read_osw(group_name, [osw_path])
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None, None, None
 
@@ -78,9 +112,6 @@ def process_group(
     ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
     valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
-    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
-    #     all_tiles=np.arange(len(sar_flat.all_tiles))
-    # )
     sar_flat = sar_flat.reset_index("tiles", drop=True)
     if "subswath" in sar_flat.dims:
         sar_flat = sar_flat.drop_vars("subswath")
@@ -88,12 +119,11 @@ def process_group(
         sar_flat = sar_flat.reset_index("all_tiles").assign_coords(
             all_tiles=np.arange(len(sar_flat.all_tiles))
         )
-    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath"])
     n_tiles = len(sar_flat.all_tiles)
 
     # 2. Temporal Filter WW3
     ww3_times = pd.to_datetime(ds_ww3.time.to_numpy())
-    t_sar = pd.Timestamp(sar_start).tz_localize(None)  # strip tzinfo for comparison
+    t_sar = pd.Timestamp(sar_start).tz_localize(None)
     t_thresh = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
     t_mask = (ww3_times >= t_sar - t_thresh) & (ww3_times <= t_sar + t_thresh)
 
@@ -112,7 +142,6 @@ def process_group(
 
     for i in range(n_tiles):
         tile = sar_flat.isel(all_tiles=i)
-        # Extract scalar values from 0D arrays to satisfy mypy
         lon_val = float(tile.oswLon)
         lat_val = float(tile.oswLat)
         dists: np.ndarray = haversine(lon_val, lat_val, cand_lons, cand_lats)
@@ -139,19 +168,12 @@ def process_group(
         ww3_ptr = np.full(n_tiles, -1, dtype=int)
         ww3_ptr[sar_indices] = cand_idx_orig[ww3_indices_rel]
 
-        # 1. Select matched WW3 data
         ds_ww3_sel = ds_ww3.isel(time=ww3_ptr)
-        # 2. Extract the actual WW3 timestamps before we rename the dimension
         actual_ww3_times = ds_ww3_sel.time.to_numpy()
-        # 3. Rename dimension to align with SAR tiles
         ds_ww3_out = ds_ww3_sel.rename({"time": "all_tiles"})
-        # 4. Re-assign simple integer coordinates to all_tiles
         ds_ww3_out = ds_ww3_out.assign_coords(all_tiles=tile_coords)
-        # 5. Put the timestamps back into a variable named 'time'
         ds_ww3_out["time"] = (["all_tiles"], actual_ww3_times)
 
-        # Calculate time diff
-        # We handle NaTs (for non-matches) gracefully
         ww3_dt = pd.to_datetime(actual_ww3_times)
         t_diffs = (ww3_dt - t_sar).total_seconds().to_numpy()
 
@@ -205,17 +227,15 @@ def process_group(
             coords={"pair": np.arange(len(sar_indices))},
         )
     else:
-        # Unreachable, but keep mypy happy
         return None, None, None
 
-    # Ensure SAR group also has clean integer indices
     ds_sar = sar_flat.reset_index("all_tiles").assign_coords(all_tiles=tile_coords)
 
     return ds_sar, ds_ww3_out, ds_match
 
 
 def process_lasso_group(
-    osw_path: str,
+    osw_path: Path,
     ds_ww3: xr.Dataset,
     group_name: str,
     config: dict[str, Any],
@@ -225,7 +245,7 @@ def process_lasso_group(
     logger.info("--- Lasso Mode: %s ---", group_name)
 
     # 1. Load SAR data
-    fat_osw, _ = read_osw(group_name, [Path(osw_path)])
+    fat_osw, _ = read_osw(group_name, [osw_path])
     if fat_osw is None or len(fat_osw.data_vars) == 0:
         return None
 
@@ -251,24 +271,19 @@ def process_lasso_group(
 
     # Handle different possible structures
     if lon_corners.ndim == 3:
-        # Shape (subswath, corners, tiles) or (corners, tiles, subswath)
         if lon_corners.shape[0] == 1 and lon_corners.shape[1] == 4:
-            # Case: (1, 4, n_tiles) -> (4, n_tiles)
-            lon_corners = lon_corners[0]  # (4, n_tiles)
-            lat_corners = lat_corners[0]  # (4, n_tiles)
+            lon_corners = lon_corners[0]
+            lat_corners = lat_corners[0]
 
         if lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
-            # Now (4, n_tiles) -> transpose to (n_tiles, 4)
-            lon_corners = lon_corners.T  # (n_tiles, 4)
-            lat_corners = lat_corners.T  # (n_tiles, 4)
+            lon_corners = lon_corners.T
+            lat_corners = lat_corners.T
 
     elif lon_corners.ndim == 4:
-        # Shape (subswath, az, ra, corners)
-        lon_corners = lon_corners.reshape(-1, 4)  # (n_tiles, 4)
+        lon_corners = lon_corners.reshape(-1, 4)
         lat_corners = lat_corners.reshape(-1, 4)
 
     elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
-        # Already (n_tiles, 4) - perfect
         pass
     else:
         logger.error("Unexpected corner array shape: %s", lon_corners.shape)
@@ -284,8 +299,6 @@ def process_lasso_group(
     if len(all_corners) < 3:
         logger.warning("Less than 3 corner points, cannot build polygon")
         return None
-
-    # Compute convex hull and buffer
 
     points = [Point(lon, lat) for lon, lat in all_corners]
     multipoint = MultiPoint(points)
@@ -304,22 +317,103 @@ def process_lasso_group(
         logger.info("No WW3 points inside the buffered subswath footprint")
         return None
 
-    # Filter WW3 dataset
     ds_ww3_filtered = ds_ww3_subset.isel(time=spatial_mask)
 
-    # Add metadata
-    ds_ww3_filtered.attrs["sar_file"] = str(Path(osw_path).name)
+    ds_ww3_filtered.attrs["sar_file"] = str(osw_path.name)
     ds_ww3_filtered.attrs["buffer_deg"] = buffer_deg
 
     logger.info("Selected %d WW3 points out of %d", np.sum(spatial_mask), len(ww3_lons))
     return ds_ww3_filtered
 
 
+def create_global_attributes(
+    sar_filename: str,
+    product_version: str,
+    mode: str,
+) -> dict[str, str]:
+    """Create CF-compliant global attributes for the L2C product."""
+    try:
+        pkg_version = importlib.metadata.version("topsocnww3sp")
+    except importlib.metadata.PackageNotFoundError:
+        pkg_version = "unknown"
+
+    parts = Path(sar_filename).stem.split("-")
+    mission = parts[0].upper() if len(parts) > 0 else "UNKNOWN"
+    subswath = parts[1].upper() if len(parts) > 1 else "UNKNOWN"
+    polarization = parts[2].upper() if len(parts) > 2 else "UNKNOWN"
+    now_str = datetime.now(tz=timezone.utc).isoformat()
+
+    return {
+        "Conventions": "CF-1.8",
+        "title": f"S1 {subswath} {polarization} L2C Co-localization Product",
+        "summary": (
+            f"Sentinel-1 {mission} {subswath} {polarization} "
+            f"OSW data co-localized with WW3 spectra using {mode} mode"
+        ),
+        "keywords": "SAR, Sentinel-1, WW3, ocean waves, spectra",
+        "keywords_vocabulary": "",
+        "history": f"{now_str} - Created by topsocnww3sp version {pkg_version}",
+        "source": f"Sentinel-1 {mission} OSW product: {Path(sar_filename).name}",
+        "references": "https://github.com/umr-lops/topsocnww3sp",
+        "comment": f"Co-localization mode: {mode}",
+        "license": "CC-BY-4.0",
+        "product_id": product_version,
+        "package_version": pkg_version,
+        "provider": "Ifremer",
+        "date_created": now_str,
+        "date_modified": now_str,
+        "processing_level": "Level-2C",
+        "processing_facility": "Ifremer/LOPS-SIAM",
+        "processor_name": "topsocnww3sp",
+        "processor_version": pkg_version,
+        "sar_mission": mission,
+        "sar_subswath": subswath,
+        "sar_polarization": polarization,
+        "creator_name": "Antoine Grouazel",
+        "creator_email": "antoine.grouazel@ifremer.fr",
+        "creator_institution": "Ifremer",
+        "institution": "Ifremer",
+        "project": "TOPSOCNWW3",
+        "publisher_name": "Ifremer/LOPS-SIAM",
+        "publisher_email": "antoine.grouazel@ifremer.fr",
+        "publisher_institution": "Ifremer",
+    }
+
+
+def write_output_file(
+    output_path: Path,
+    global_attrs: dict[str, str],
+    sar_groups: list[tuple[str, xr.Dataset]],
+    ww3_groups: list[tuple[str, xr.Dataset]],
+    match_groups: list[tuple[str, xr.Dataset]] | None = None,
+) -> None:
+    """Write a complete L2C output file with global attributes and groups."""
+    # Initialize file with global attributes
+    xr.Dataset(attrs=global_attrs).to_netcdf(output_path, mode="w")
+
+    # Write SAR groups
+    for group_name, ds in sar_groups:
+        ds.to_netcdf(output_path, group=group_name, mode="a")
+
+    # Write WW3 groups
+    for group_name, ds in ww3_groups:
+        ds_copy = ds.copy()
+        ds_copy.encoding.clear()
+        ds_copy.to_netcdf(output_path, group=group_name, mode="a")
+
+    # Write MATCH_MAP groups if provided
+    if match_groups:
+        for group_name, ds in match_groups:
+            ds.to_netcdf(output_path, group=group_name, mode="a")
+
+
 def main() -> None:
     """Main function to process SAR and WW3 data for colocalization."""
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--osw-file", required=True, help="path of nc file containing S1 OSW data"
+        "--ocn-safe",
+        required=True,
+        help="path to SAFE directory containing OSW .nc files (IW1, IW2, IW3 or EW1..EW5)",
     )
     parser.add_argument(
         "--ww3-file",
@@ -339,7 +433,7 @@ def main() -> None:
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
-        "--output-dir", required=True, help="Directory to save output files."
+        "--output-dir", required=True, help="Base directory to save output files."
     )
     parser.add_argument(
         "--overwrite",
@@ -354,28 +448,36 @@ def main() -> None:
         level=log_level, format="%(asctime)s - %(levelname)s - %(message)s"
     )
 
-    # Propager aux autres modules
     logging.getLogger("topsocnww3sp.utils").setLevel(log_level)
     logging.getLogger("topsocnww3sp.read_s1_osw_tops_data").setLevel(log_level)
-
-    # Récupérer le logger pour ce module
-    # logger = logging.getLogger(__name__)
 
     config_path = Path(args.config)
     with config_path.open(encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
-    osw_file_path = Path(args.osw_file)
-    fname = osw_file_path.name
-    sar_start = datetime.strptime(fname.split("-")[4], "%Y%m%dt%H%M%S").replace(
+    safe_path = Path(args.ocn_safe)
+    osw_files = list_osw_files_in_safe(safe_path)
+
+    # Extract SAR start time from first file (or from SAFE name if more robust)
+    first_osw = osw_files[0]
+    fname = first_osw.name
+    parts = fname.split("-")
+    sar_start = datetime.strptime(parts[4], "%Y%m%dt%H%M%S").replace(
         tzinfo=timezone.utc
     )
 
-    output_name = fname.replace(".nc", f"_L2C_{args.mode}.nc")
+    product_version = config.get("product_version", "v0.1")
+    safe_name = safe_path.name
+    year = sar_start.strftime("%Y")
+    month = sar_start.strftime("%m")
+    day = sar_start.strftime("%d")
+    output_base_dir = Path(args.output_dir) / year / month / day / safe_name
+    output_base_dir.mkdir(parents=True, exist_ok=True)
 
+    # Load WW3 data once for all subswaths
     ww3_path = args.ww3_file or find_ww3_file(sar_start, config)
-    # Check if ww3_path is a file or directory for multi-grid mode
     ww3_path_obj = Path(ww3_path)
+
     if ww3_path_obj.is_dir():
         logger.info("Multi-grid mode: loading WW3 data from directory %s", ww3_path_obj)
         try:
@@ -386,65 +488,78 @@ def main() -> None:
     else:
         logger.info("Single-file mode: loading WW3 data from %s", ww3_path_obj)
         ds_ww3 = xr.open_dataset(ww3_path_obj)
+
     groups = ["intraburst", "interburst"]
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / Path(output_name)
-    logger.info("Output will be saved to: %s", output_path)
-    if output_path.exists() and not args.overwrite:
-        logger.info("Output file %s already exists. Use --overwrite...", output_path)
-        return
-    if output_path.exists() and args.overwrite:
-        output_path.unlink()
+    # Process each OSW file (one per subswath)
+    for osw_file in osw_files:
+        subswath_name = osw_file.stem.split("-")[1]  # iw1, iw2, iw3, etc.
+        logger.info("=" * 60)
+        logger.info("Processing subswath: %s", subswath_name)
+        logger.info("=" * 60)
 
-    if args.mode == "lasso":
-        # For lasso mode, process WW3 only for the SAR first group (intraburst if both)
-        processed = False
-        for g in groups:
-            logger.info("Processing lasso for %s group", g)
-            fat_osw, _ = read_osw(g, [Path(args.osw_file)])
-            if fat_osw is not None:
-                if "tiles" in fat_osw.dims or "tiles" in fat_osw.coords:
-                    fat_osw_to_write = fat_osw.reset_index("tiles")
-                else:
-                    fat_osw_to_write = fat_osw
+        output_name = f"{osw_file.stem}_{product_version}.nc"
+        output_path = output_base_dir / output_name
 
-                if not processed:
-                    # First write: create file with SAR group
-                    fat_osw_to_write.to_netcdf(output_path, group=f"SAR_{g}", mode="w")
-                    processed = True
-                else:
-                    # Subsequent groups: add only SAR (if needed) but skip WW3 duplication
-                    fat_osw_to_write.to_netcdf(output_path, group=f"SAR_{g}", mode="a")
-                    logger.info("Added SAR_%s without duplicating WW3 data", g)
-        ds_ww3_selected = process_lasso_group(
-            args.osw_file,
-            ds_ww3,
-            group_name="intraburst",
-            config=config,
-            sar_start=sar_start,
+        if output_path.exists() and not args.overwrite:
+            logger.info("Output file %s already exists. Skipping...", output_path)
+            continue
+        if output_path.exists() and args.overwrite:
+            output_path.unlink()
+
+        global_attrs = create_global_attributes(
+            osw_file.name, product_version, args.mode
         )
-        if ds_ww3_selected is not None:
-            ds_ww3_selected.to_netcdf(output_path, group="WW3", mode="a")
-            logger.info(" WW3 group added to the netcdf")
-        if not processed:
-            logger.info("No WW3 data extracted")
-        return
-    first_write = True
-    for g in groups:
-        result = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)
-        d_sar, d_ww3, d_match = result
-        # Explicitly check each component to satisfy mypy
-        if d_sar is not None and d_ww3 is not None and d_match is not None:
-            mode_flag = "w" if first_write else "a"
-            logger.info("Writing %s to %s", g, output_path)
-            d_sar.to_netcdf(output_path, group=f"SAR_{g}", mode=mode_flag)
-            d_ww3_copy = d_ww3.copy()
-            d_ww3_copy.encoding.clear()
-            d_ww3_copy.to_netcdf(output_path, group=f"WW3_{g}", mode="a")
-            d_match.to_netcdf(output_path, group=f"MATCH_MAP_{g}", mode="a")
-            first_write = False
+
+        if args.mode == "lasso":
+            sar_groups = []
+            ww3_groups = []
+
+            # Process SAR groups
+            for g in groups:
+                fat_osw, _ = read_osw(g, [osw_file])
+                if fat_osw is not None:
+                    if "tiles" in fat_osw.dims or "tiles" in fat_osw.coords:
+                        fat_osw_to_write = fat_osw.reset_index("tiles")
+                    else:
+                        fat_osw_to_write = fat_osw
+                    sar_groups.append((f"SAR_{g}", fat_osw_to_write))
+
+            # Process WW3 for this subswath
+            ds_ww3_selected = process_lasso_group(
+                osw_file, ds_ww3, "intraburst", config, sar_start
+            )
+            if ds_ww3_selected is not None:
+                ww3_groups.append(("WW3", ds_ww3_selected))
+
+            if sar_groups or ww3_groups:
+                write_output_file(output_path, global_attrs, sar_groups, ww3_groups)
+                logger.info("Successfully wrote %s", output_path)
+            else:
+                logger.warning("No data extracted for %s", subswath_name)
+
+        else:  # modes 1to1, unique, many
+            sar_groups = []
+            ww3_groups = []
+            match_groups = []
+
+            for g in groups:
+                result = process_group(
+                    osw_file, ds_ww3, g, config, sar_start, args.mode
+                )
+                d_sar, d_ww3, d_match = result
+                if d_sar is not None and d_ww3 is not None and d_match is not None:
+                    sar_groups.append((f"SAR_{g}", d_sar))
+                    ww3_groups.append((f"WW3_{g}", d_ww3))
+                    match_groups.append((f"MATCH_MAP_{g}", d_match))
+
+            if sar_groups:
+                write_output_file(
+                    output_path, global_attrs, sar_groups, ww3_groups, match_groups
+                )
+                logger.info("Successfully wrote %s", output_path)
+            else:
+                logger.warning("No data extracted for %s", subswath_name)
 
     logger.info("Done.")
 

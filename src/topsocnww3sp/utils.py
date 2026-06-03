@@ -74,7 +74,8 @@ def format_logs(logger_obj: logging.Logger, level: str) -> logging.Logger:
 def load_ww3_multi_grid(
     ww3_dir: Path, sar_start: datetime, config: dict[str, Any]
 ) -> xr.Dataset:
-    """Load and merge WW3 data from multiple grids (IRI configuration).
+    """
+    Load and merge WW3 data from multiple grids (IRI configuration).
 
     Args:
         ww3_dir: Directory containing WW3 grid subdirectories
@@ -84,6 +85,7 @@ def load_ww3_multi_grid(
     Returns:
         Merged xarray.Dataset with all available WW3 grids
     """
+
     if "ww3_grids" not in config:
         error_msg = "Missing 'ww3_grids' configuration for multi-grid mode"
         raise ValueError(error_msg)
@@ -95,6 +97,9 @@ def load_ww3_multi_grid(
 
     # Build flag meaning string once
     flag_meaning_str = ", ".join(config["ww3_grids"])
+    # Create flag values string: "0 1 2"
+    flag_values_str = " ".join([str(i) for i in range(len(config["ww3_grids"]))])
+
     for grid_name, grid_config in config["ww3_grids"].items():
         # Build pattern with year
         year_str = sar_start.strftime("%Y")
@@ -108,8 +113,10 @@ def load_ww3_multi_grid(
             )
             continue
 
-        # Load and concatenate files for this grid
-        ds_grid = xr.open_mfdataset(files, combine="nested", concat_dim="time")
+        # Load and concatenate files for this grid - FIXED: added data_vars='all'
+        ds_grid = xr.open_mfdataset(
+            files, combine="nested", concat_dim="time", data_vars="all"
+        )
         ww3_times = pd.to_datetime(ds_grid.time.to_numpy())
 
         # Temporal filter
@@ -120,20 +127,15 @@ def load_ww3_multi_grid(
 
         ds_filtered = ds_grid.isel(time=t_mask)
 
-        # Add provenance variable with integer code for each grid
-        # Use an integer code (0, 1, 2, ...) for each grid
+        # Add provenance variable
         grid_code = list(config["ww3_grids"].keys()).index(grid_name)
-        explicite_comment = "0=arctic, 1=antarctic, 2=midlatitude"
         provenance = xr.DataArray(
-            np.full(ds_filtered.sizes["time"], grid_code),
+            np.full(ds_filtered.sizes["time"], grid_code, dtype=np.int64),
             dims="time",
             attrs={
                 "long_name": "WW3 grid provenance",
                 "flag_meanings": flag_meaning_str,
-                "flag_values": " ".join(
-                    [str(i) for i in range(len(config["ww3_grids"]))]
-                ),
-                "comment": explicite_comment,
+                "flag_values": flag_values_str,
             },
         )
         ds_filtered["ww3_grid_provenance"] = provenance

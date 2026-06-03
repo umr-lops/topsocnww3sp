@@ -34,21 +34,9 @@ def read_osw(
 ) -> tuple[xr.Dataset, dict[str, np.ndarray]]:
     """
     Read OSW files and concatenate along tiles dimension.
-
-    Args:
-        group (str): group in the osw file to read, can be 'intraburst' or 'interburst'
-        lst_sar_files_osw (list[Path]): list of osw files to read
-        dev (bool): flag to indicate if the script is run in development mode,
-                    if True, only a subset of files will be processed for testing purposes
-
-    Returns:
-        fat_osw (xarray dataset): dataset concatenated along the tiles dimension
-            and reduced along oswKyBinSize to minimum common size
-        coords_osw (dict): dictionary with keys 'lon_osw' and 'lat_osw'
     """
     cpt_subswath_concat = 0
     cpt_subswath_discard = 0
-    # Use lazy formatting for logging
     logger.info("Found %d osw files ", len(lst_sar_files_osw))
     coords_osw: dict[str, np.ndarray] = {}
     coords_osw["lon_osw"] = []
@@ -60,12 +48,16 @@ def read_osw(
     if dev:
         lst_sar_files_osw = lst_sar_files_osw[:2]
         logger.info("Running in development mode, only processing the first 2 files")
+
     for ii in tqdm(range(len(lst_sar_files_osw))):
         onesarfileocn = lst_sar_files_osw[ii]
         dsosw = xr.open_dataset(onesarfileocn, group=group)
-        # dsosw["onesarfileocn"] = onesarfileocn
+
+        # Preserve original attributes from the source file
+        # The source file contains important metadata (title, institution, etc.)
+        # We add source_file for provenance
         dsosw.attrs["source_file"] = clean_source_path(onesarfileocn)
-        # Use .to_numpy() instead of .values
+
         coords_osw["lon_osw"] = np.hstack(
             [coords_osw["lon_osw"], dsosw["oswLon"].squeeze().to_numpy().ravel()]
         )
@@ -75,26 +67,25 @@ def read_osw(
 
         min_kybinsize = min(min_kybinsize, dsosw["oswKyBinSize"].size)
 
-        if (
-            dsosw["oswLandFlag"].to_numpy() == 0
-        ).any():  # at least one tile is over ocean
-            if np.isnan(dsosw.oswKy.to_numpy()).any():
-                pass
+        if (dsosw["oswLandFlag"].to_numpy() == 0).any():
             concatosw.append(dsosw.stack(tiles=("oswRaSize", "oswAzSize")))
             cpt_subswath_concat += 1
         else:
             cpt_subswath_discard += 1
+
     logger.info(
         "Number of subswath concatenated: %d, discarded because only land: %d",
         cpt_subswath_concat,
         cpt_subswath_discard,
     )
     logger.debug("min_kybinsize %d", min_kybinsize)
-    # Use list comprehension instead of for loop (PERF401)
+
+    # List comprehension for performance
     concatosw2 = [
         oo.isel({"oswKyBinSize": slice(0, min_kybinsize)}) for oo in concatosw
     ]
     fat_osw = xr.concat(concatosw2, dim="subswath", join="outer")
+
     return fat_osw, coords_osw
 
 
