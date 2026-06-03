@@ -339,7 +339,7 @@ def main() -> None:
     )
     parser.add_argument("--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument(
-        "--output-dir", required=True, help="Directory to save output files."
+        "--output-dir", required=True, help="Base directory to save output files."
     )
     parser.add_argument(
         "--overwrite",
@@ -358,20 +358,39 @@ def main() -> None:
     logging.getLogger("topsocnww3sp.utils").setLevel(log_level)
     logging.getLogger("topsocnww3sp.read_s1_osw_tops_data").setLevel(log_level)
 
-    # Récupérer le logger pour ce module
-    # logger = logging.getLogger(__name__)
-
     config_path = Path(args.config)
     with config_path.open(encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     osw_file_path = Path(args.osw_file)
     fname = osw_file_path.name
-    sar_start = datetime.strptime(fname.split("-")[4], "%Y%m%dt%H%M%S").replace(
+
+    # Parse SAR filename to extract information
+    # Expected format: s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc
+    parts = fname.split("-")
+    sar_start = datetime.strptime(parts[4], "%Y%m%dt%H%M%S").replace(
         tzinfo=timezone.utc
     )
+    # sar_mode = parts[0]  # s1a, s1b, etc.
+    # sar_subswath = parts[1]  # iw1, iw2, iw3, ew1, etc.
+    # sar_product_id = parts[-1].replace(".nc", "")  # 001, etc.
 
-    output_name = fname.replace(".nc", f"_L2C_{args.mode}.nc")
+    # Get product version from config (default to "v0.1" if not present)
+    product_version = config.get("product_version", "v0.1")
+
+    # Build output directory structure: YYYY/MM/DD/...SAFE/
+    safe_name = osw_file_path.parent.parent.name  # Gets the SAFE directory name
+    year = sar_start.strftime("%Y")
+    month = sar_start.strftime("%m")
+    day = sar_start.strftime("%d")
+
+    output_subdir = Path(args.output_dir) / year / month / day / safe_name
+    output_subdir.mkdir(parents=True, exist_ok=True)
+
+    # Build output filename with product version
+    # Remove the old version suffix if present, then add new version
+    base_fname = fname.replace(".nc", "")
+    output_name = f"{base_fname}_{product_version}.nc"
 
     ww3_path = args.ww3_file or find_ww3_file(sar_start, config)
     # Check if ww3_path is a file or directory for multi-grid mode
@@ -386,12 +405,12 @@ def main() -> None:
     else:
         logger.info("Single-file mode: loading WW3 data from %s", ww3_path_obj)
         ds_ww3 = xr.open_dataset(ww3_path_obj)
+
     groups = ["intraburst", "interburst"]
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / Path(output_name)
+    output_path = output_subdir / output_name
     logger.info("Output will be saved to: %s", output_path)
+
     if output_path.exists() and not args.overwrite:
         logger.info("Output file %s already exists. Use --overwrite...", output_path)
         return
@@ -431,6 +450,7 @@ def main() -> None:
         if not processed:
             logger.info("No WW3 data extracted")
         return
+
     first_write = True
     for g in groups:
         result = process_group(args.osw_file, ds_ww3, g, config, sar_start, args.mode)

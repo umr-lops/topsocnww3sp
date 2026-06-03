@@ -398,21 +398,19 @@ def test_ww3_grid_provenance_presence(
 def test_config_yaml_structure(tmp_path):
     """Test that config.yaml contains required sections for multi-grid mode."""
     config_content = """
-directory_ww3spectra_output: /fake/path
-TIME_THRESHOLD_MINUTES: 30
-DISTANCE_THRESHOLD_KM: 20
-BUFFER_DEG: 0.1
-ww3_grids:
-  arctic:
-    pattern: "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"
-    priority: 1
-  antarctic:
-    pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
-    priority: 2
-  midlatitude:
-    pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
-    priority: 0
-"""
+    directory_ww3spectra_output: /fake/path
+    TIME_THRESHOLD_MINUTES: 30
+    DISTANCE_THRESHOLD_KM: 20
+    BUFFER_DEG: 0.1
+    product_version: "v0.1"
+    ww3_grids:
+        arctic:
+            pattern: "ARC-*/YYYY-*/TRACK_NC/WW3-ARC-*_*_trck.nc"
+        antarctic:
+            pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
+        midlatitude:
+            pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+    """
     config_file = tmp_path / "config.yml"
     config_file.write_text(config_content)
 
@@ -420,12 +418,13 @@ ww3_grids:
         config = yaml.safe_load(f)
 
     assert "ww3_grids" in config
+    assert "product_version" in config
+    assert config["product_version"] == "v0.1"
     assert "arctic" in config["ww3_grids"]
     assert "antarctic" in config["ww3_grids"]
     assert "midlatitude" in config["ww3_grids"]
     for grid in config["ww3_grids"].values():
         assert "pattern" in grid
-        assert "priority" in grid
 
 
 # Test 3: WW3 file search method
@@ -469,20 +468,6 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
     antarc_file.touch()
 
     # Create mock dataset function
-    # def mock_open_mfdataset(files, **kwargs):
-    #     # Return a dummy dataset with time dimension
-    #     times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
-    #     ds = xr.Dataset(
-    #         data_vars={
-    #             "longitude": (["time"], [48.0]),
-    #             "latitude": (["time"], [0.0]),
-    #             "time": times,
-    #         },
-    #         coords={"time": times},
-    #     )
-    #     # Add provenance variable to simulate load_ww3_multi_grid behavior
-    #     ds["ww3_grid_provenance"] = xr.DataArray([0], dims="time")
-    #     return ds
     def mock_open_mfdataset(_, **__):
         times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
         # Créer un dataset simple
@@ -499,3 +484,229 @@ def test_load_ww3_multi_grid_file_search(monkeypatch, tmp_path):
 
     assert ds_merged is not None
     assert "ww3_grid_provenance" in ds_merged.variables
+
+
+# Test 4: Output filename and directory structure
+def test_output_filename_structure(tmp_path, monkeypatch):
+    """Test that output files are saved with correct naming and directory structure."""
+    # Mock CLI arguments
+    mock_args = MagicMock()
+    mock_args.osw_file = (
+        "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc"
+    )
+    mock_args.ww3_file = "dummy_ww3.nc"
+    mock_args.config = tmp_path / "config.yml"
+    mock_args.mode = "lasso"
+    mock_args.group = "both"
+    mock_args.verbose = False
+    mock_args.output_dir = str(tmp_path / "output")
+    mock_args.overwrite = False
+
+    # Create config with product_version
+    config_content = """
+directory_ww3spectra_output: /fake/path
+TIME_THRESHOLD_MINUTES: 30
+DISTANCE_THRESHOLD_KM: 20
+BUFFER_DEG: 0.1
+product_version: "v0.1"
+"""
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(config_content)
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda _: mock_args)
+    monkeypatch.setattr(Path, "mkdir", lambda *_, **__: None)
+    monkeypatch.setattr(Path, "exists", lambda _: False)
+    monkeypatch.setattr(Path, "unlink", lambda *_, **__: None)
+
+    # Mock xarray operations with lambda, NOT return_value
+    monkeypatch.setattr(xr, "open_dataset", lambda *_, **__: xr.Dataset())
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.load_ww3_multi_grid", lambda *_, **__: xr.Dataset()
+    )
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.read_osw", lambda *_, **__: (xr.Dataset(), None)
+    )
+
+    # Track the output path used in to_netcdf
+    saved_paths = []
+
+    def mock_to_netcdf(_, path, **__):
+        saved_paths.append(path)
+
+    monkeypatch.setattr(xr.Dataset, "to_netcdf", mock_to_netcdf)
+
+    # Call main
+    main()
+
+    # Verify output path structure
+    assert len(saved_paths) > 0
+    output_path = saved_paths[0]
+
+    # Check directory structure contains year/month/day
+    assert "2022" in str(output_path)
+    assert "01" in str(output_path)
+    assert "07" in str(output_path)
+
+    # Check filename contains product version
+    filename = output_path.name
+    assert filename.endswith("_v0.1.nc")
+    assert filename.startswith(
+        "s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001"
+    )
+
+
+def test_output_filename_for_different_sar_modes(tmp_path, monkeypatch):
+    """Test output filename for different SAR modes (s1a, s1b, s1c)."""
+    sar_files = [
+        ("s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001.nc", "s1a"),
+        ("s1b-iw2-osw-hh-20230108t062429-20230108t062500-041351-04ea80-002.nc", "s1b"),
+        ("s1c-iw3-osw-vv-20230409t020545-20230409t020615-001781-003328-003.nc", "s1c"),
+    ]
+
+    # Correct config content with proper YAML syntax
+    config_content = """
+product_version: "v1.0"
+TIME_THRESHOLD_MINUTES: 30
+DISTANCE_THRESHOLD_KM: 20
+BUFFER_DEG: 0.1
+directory_ww3spectra_output: /fake/path
+"""
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(config_content)
+
+    for sar_file, expected_prefix in sar_files:
+        mock_args = MagicMock()
+        mock_args.osw_file = sar_file
+        mock_args.ww3_file = "dummy_ww3.nc"
+        mock_args.config = tmp_path / "config.yml"
+        mock_args.mode = "lasso"
+        mock_args.group = "both"
+        mock_args.verbose = False
+        mock_args.output_dir = str(tmp_path / "output")
+        mock_args.overwrite = False
+
+        # Create realistic WW3 dataset with time dimension
+        times = pd.date_range("2022-01-07 06:00", periods=1, freq="h")
+        dummy_ww3 = xr.Dataset(
+            data_vars={
+                "longitude": (["time"], [48.0]),
+                "latitude": (["time"], [0.0]),
+            },
+            coords={"time": times},
+        )
+
+        # Create realistic SAR dataset with proper structure for lasso mode
+        n_az = 3
+        n_ra = 2
+        n_corners = 4
+
+        # Create coordinates
+        subswath = [0]
+        oswAzSize = np.arange(n_az)
+        oswRaSize = np.arange(n_ra)
+        oswCellCorner = np.arange(n_corners)
+
+        # Use modern numpy random generator (fix NPY002)
+        rng = np.random.default_rng()
+        random_noise = rng.standard_normal((1, n_az, n_ra, n_corners)) * 0.1
+
+        # Create corner arrays with some realistic values
+        lon_corners = np.full((1, n_az, n_ra, n_corners), -5.0) + random_noise
+        lat_corners = np.full((1, n_az, n_ra, n_corners), 48.0) + random_noise
+
+        # Create simple SAR dataset with MultiIndex
+        sar_ds = xr.Dataset(
+            data_vars={
+                "oswLon": (
+                    ["subswath", "oswRaSize", "oswAzSize"],
+                    np.full((1, n_ra, n_az), -5.0),
+                ),
+                "oswLat": (
+                    ["subswath", "oswRaSize", "oswAzSize"],
+                    np.full((1, n_ra, n_az), 48.0),
+                ),
+                "oswLongitudeCorner": (
+                    ["subswath", "oswAzSize", "oswRaSize", "oswCellCorner"],
+                    lon_corners,
+                ),
+                "oswLatitudeCorner": (
+                    ["subswath", "oswAzSize", "oswRaSize", "oswCellCorner"],
+                    lat_corners,
+                ),
+            },
+            coords={
+                "subswath": subswath,
+                "oswRaSize": oswRaSize,
+                "oswAzSize": oswAzSize,
+                "oswCellCorner": oswCellCorner,
+            },
+        )
+
+        # Stack to create MultiIndex 'tiles' (PD013 - keep as is, stack is appropriate)
+        sar_ds = sar_ds.stack(tiles=["oswRaSize", "oswAzSize"])  # noqa: PD013
+
+        # Typed factory functions to avoid B023 and mypy errors
+        def make_mock_open_dataset(ds: xr.Dataset):
+            return lambda *_, **__: ds
+
+        def make_mock_load_multi_grid(ds: xr.Dataset):
+            return lambda *_, **__: ds
+
+        def make_mock_read_osw(ds: xr.Dataset):
+            return lambda *_, **__: (ds, None)
+
+        def make_mock_process_lasso_group(ds: xr.Dataset):
+            def mock_fn(*_, **__):
+                filtered = ds.copy()
+                filtered.attrs["sar_file"] = "fake.nc"
+                filtered.attrs["buffer_deg"] = 0.1
+                return filtered
+
+            return mock_fn
+
+        # Create mocks using factory functions
+        mock_open_dataset = make_mock_open_dataset(dummy_ww3)
+        mock_load_multi_grid = make_mock_load_multi_grid(dummy_ww3)
+        mock_read_osw = make_mock_read_osw(sar_ds)
+        mock_process_lasso = make_mock_process_lasso_group(dummy_ww3)
+
+        monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda _: mock_args)  # noqa: B023
+        monkeypatch.setattr(Path, "mkdir", lambda *_, **__: None)
+        monkeypatch.setattr(Path, "exists", lambda _: False)
+        monkeypatch.setattr(Path, "unlink", lambda *_, **__: None)
+
+        monkeypatch.setattr(xr, "open_dataset", mock_open_dataset)
+        monkeypatch.setattr(
+            "topsocnww3sp.l2c_processor.load_ww3_multi_grid",
+            mock_load_multi_grid,
+        )
+        monkeypatch.setattr(
+            "topsocnww3sp.l2c_processor.read_osw",
+            mock_read_osw,
+        )
+        monkeypatch.setattr(
+            "topsocnww3sp.l2c_processor.process_lasso_group",
+            mock_process_lasso,
+        )
+
+        class PathCollector:
+            """Collector for to_netcdf paths."""
+
+            paths: list[Path]
+
+            def __init__(self) -> None:
+                self.paths = []
+
+            def __call__(self, path: Path, **__: object) -> None:
+                """Mock to_netcdf method."""
+                self.paths.append(path)
+
+        collector = PathCollector()
+        monkeypatch.setattr(xr.Dataset, "to_netcdf", collector)
+
+        main()
+
+        assert len(collector.paths) > 0
+        filename = collector.paths[0].name
+        assert filename.startswith(expected_prefix)
+        assert filename.endswith("_v1.0.nc")
