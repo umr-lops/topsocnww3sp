@@ -81,10 +81,17 @@ def process_group(
     ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
     valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
-    sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
-        all_tiles=np.arange(len(sar_flat.all_tiles))
-    )
-
+    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath", "tiles"]).assign_coords(
+    #     all_tiles=np.arange(len(sar_flat.all_tiles))
+    # )
+    sar_flat = sar_flat.reset_index("tiles", drop=True)
+    if "subswath" in sar_flat.dims:
+        sar_flat = sar_flat.drop_vars("subswath")
+    if "all_tiles" in sar_flat.dims:
+        sar_flat = sar_flat.reset_index("all_tiles").assign_coords(
+            all_tiles=np.arange(len(sar_flat.all_tiles))
+        )
+    # sar_flat = sar_flat.drop_vars(["all_tiles", "subswath"])
     n_tiles = len(sar_flat.all_tiles)
 
     # 2. Temporal Filter WW3
@@ -217,18 +224,7 @@ def process_lasso_group(
     config: dict[str, Any],
     sar_start: datetime,
 ) -> xr.Dataset | None:
-    """Lasso mode: extract WW3 points within buffered footprint of the SAR subswath.
-
-    Args:
-        osw_path: Path to the OSW file (one subswath)
-        ds_ww3: WW3 dataset
-        group_name: "intraburst" or "interburst"
-        config: Configuration dict (needs TIME_THRESHOLD_MINUTES, BUFFER_DEG)
-        sar_start: SAR acquisition time
-
-    Returns:
-        WW3 dataset (time+space filtered) or None if no data.
-    """
+    """Lasso mode: extract WW3 points within buffered footprint of the SAR subswath."""
     logger.info("--- Lasso Mode: %s ---", group_name)
 
     # 1. Load SAR data
@@ -250,34 +246,43 @@ def process_lasso_group(
     ww3_lats = ds_ww3_subset.latitude.to_numpy()
     buffer_deg = config.get("BUFFER_DEG", 0.1)
 
-    # 3. Build polygon from all tile corners of the subswath
-    # Extract corners correctly
+    # 3. Extract corners - handle shape (subswath, corner, tiles)
     lon_corners = fat_osw["oswLongitudeCorner"].to_numpy()
     lat_corners = fat_osw["oswLatitudeCorner"].to_numpy()
 
-    # Handle different possible shapes
+    logger.debug("Corner array shape:  %s", lon_corners.shape)
+
+    # Handle different possible structures
     if lon_corners.ndim == 3:
-        # Shape (azimuth, range, 4)
-        n_az, n_ra, n_corners = lon_corners.shape
-        all_corners = []
-        for i in range(n_az):
-            for j in range(n_ra):
-                for k in range(n_corners):
-                    lon_val = float(lon_corners[i, j, k])
-                    lat_val = float(lat_corners[i, j, k])
-                    all_corners.append((lon_val, lat_val))
-    elif lon_corners.ndim == 2:
-        # Shape (n_tiles, 4) after stacking
-        n_tiles, n_corners = lon_corners.shape
-        all_corners = []
-        for i in range(n_tiles):
-            for k in range(n_corners):
-                lon_val = float(lon_corners[i, k])
-                lat_val = float(lat_corners[i, k])
-                all_corners.append((lon_val, lat_val))
+        # Shape (subswath, corners, tiles) or (corners, tiles, subswath)
+        if lon_corners.shape[0] == 1 and lon_corners.shape[1] == 4:
+            # Case: (1, 4, n_tiles) -> (4, n_tiles)
+            lon_corners = lon_corners[0]  # (4, n_tiles)
+            lat_corners = lat_corners[0]  # (4, n_tiles)
+
+        if lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
+            # Now (4, n_tiles) -> transpose to (n_tiles, 4)
+            lon_corners = lon_corners.T  # (n_tiles, 4)
+            lat_corners = lat_corners.T  # (n_tiles, 4)
+
+    elif lon_corners.ndim == 4:
+        # Shape (subswath, az, ra, corners)
+        lon_corners = lon_corners.reshape(-1, 4)  # (n_tiles, 4)
+        lat_corners = lat_corners.reshape(-1, 4)
+
+    elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
+        # Already (n_tiles, 4) - perfect
+        pass
     else:
         logger.error("Unexpected corner array shape: %s", lon_corners.shape)
         return None
+
+    # Build all corners
+    all_corners = [
+        (float(lon_corners[i, k]), float(lat_corners[i, k]))
+        for i in range(lon_corners.shape[0])
+        for k in range(4)
+    ]
 
     if len(all_corners) < 3:
         logger.warning("Less than 3 corner points, cannot build polygon")
@@ -285,7 +290,6 @@ def process_lasso_group(
 
     # Compute convex hull and buffer
 
-    # Convert to list of Points explicitly
     points = [Point(lon, lat) for lon, lat in all_corners]
     multipoint = MultiPoint(points)
     hull = multipoint.convex_hull
@@ -303,12 +307,12 @@ def process_lasso_group(
         logger.info("No WW3 points inside the buffered subswath footprint")
         return None
 
-    # Subset WW3 dataset
+    # Filter WW3 dataset
     ds_ww3_filtered = ds_ww3_subset.isel(time=spatial_mask)
+
     # Add metadata
     ds_ww3_filtered.attrs["sar_file"] = str(Path(osw_path).name)
     ds_ww3_filtered.attrs["buffer_deg"] = buffer_deg
-    ds_ww3_filtered.attrs["n_corners_used"] = len(all_corners)
 
     logger.info("Selected %d WW3 points out of %d", np.sum(spatial_mask), len(ww3_lons))
     return ds_ww3_filtered
