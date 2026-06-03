@@ -15,8 +15,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Many color libraries just need this to be set to any value, but at least
-  # one distinguishes color depth, where "3" -> "256-bit color".
   FORCE_COLOR: 3
 
 jobs:
@@ -37,7 +35,6 @@ jobs:
     environment: pypi
     permissions:
       id-token: write
-      attestations: write
       contents: read
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
@@ -48,13 +45,11 @@ jobs:
           name: Packages
           path: dist
 
-      - name: Generate artifact attestation for sdist and wheel
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: "dist/*"
+      - name: List dist files
+        run: ls -la dist/
 
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          # Remember to tell (test-)pypi about this repo before publishing
-          # Remove this line to publish to PyPI
-          repository-url: https://test.pypi.org/legacy/
+        # Pour tester sur test.pypi.org (décommenter)
+        # with:
+        #   repository-url: https://test.pypi.org/legacy/
+        # Pour publier directement sur PyPI (supprimer repository-url)
