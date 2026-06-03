@@ -45,11 +45,5 @@ jobs:
           name: Packages
           path: dist
 
-      - name: List dist files
-        run: ls -la dist/
-
       - uses: pypa/gh-action-pypi-publish@release/v1
-        # Pour tester sur test.pypi.org (décommenter)
-        # with:
-        #   repository-url: https://test.pypi.org/legacy/
-        # Pour publier directement sur PyPI (supprimer repository-url)
+        # Pas de repository-url -> publication sur PyPI
