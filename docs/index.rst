@@ -10,10 +10,11 @@ Welcome to the TOPSOCNWW3SP documentation. This project provides tools for coloc
    :caption: Contents:
 
    usage
-   api
    install
-   colocation_notebook
+   api
+   l2c_definition
    l2c_output_usage
+   colocation_notebook
    l2c_processor_strategy
 
 Indices and tables
