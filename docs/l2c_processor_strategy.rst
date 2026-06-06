@@ -1,4 +1,5 @@
-# Exploration of Different Strategies for the L2C Processor
+Exploration of Different Strategies for the L2C Processor
+============================================================
 
 This document explores different strategies for the L2C processor to determine which WW3 spectra to associate with each track point, and how to handle cases where no spectra are found within the defined spatiotemporal thresholds. This includes testing different distance and time thresholds, as well as fallback strategies such as using the nearest spectrum or interpolating between nearby spectra.
 

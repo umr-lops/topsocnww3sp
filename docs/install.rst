@@ -12,7 +12,8 @@ Prerequisites
 - A working Python environment (venv, conda, etc.)
 
 Install from Source
-------------------
+--------------------
+
 
 Clone the repository and install the package:
 

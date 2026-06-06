@@ -7,7 +7,7 @@ from typing import Any
 project = "topsocnww3sp"
 copyright = "2026, Antoine Grouazel"
 author = "Antoine Grouazel"
-version = release = importlib.metadata.version("topsocnww3sp")
+version = release = "dev"
 
 extensions = [
     "myst_parser",

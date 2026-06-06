@@ -11,7 +11,8 @@ Product Definition
 The L2C product is a NetCDF file that co-localizes Sentinel-1 Ocean Waves (OSW) data with WaveWatch III (WW3) spectral data. The goal is to provide a dataset where SAR observations and model spectra are aligned in time and space for easier comparison and analysis.
 
 L2C Output Structure
--------------------
+---------------------
+
 
 The output files use NetCDF groups to separate different types of information:
 
