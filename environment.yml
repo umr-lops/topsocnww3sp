@@ -1,0 +1,15 @@
+name: topsocnww3sp
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - xarray
+  - netcdf4
+  - tqdm
+  - pandas
+  - numpy
+  - pyyaml
+  - matplotlib
+  - cartopy
+  - scipy
+  - dask
