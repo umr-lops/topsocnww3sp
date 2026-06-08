@@ -39,7 +39,8 @@ dependencies = [
   "pyyaml",
   "matplotlib",
   "cartopy",
-  "scipy"
+  "scipy",
+  "dask"
 ]
 [project.optional-dependencies]
 plot = [
