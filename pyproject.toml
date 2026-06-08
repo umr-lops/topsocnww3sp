@@ -56,7 +56,7 @@ Changelog = "https://github.com/umr-lops/topsocnww3sp/releases"
 
 [project.scripts]
 procl2c = "topsocnww3sp.l2c_processor:main"
-
+procl2c-sequential = "topsocnww3sp.l2c_sequential_processing:main"
 
 [dependency-groups]
 test = [
