@@ -25,7 +25,7 @@ From: ubuntu:22.04
 
     # 1. System dependencies
     apt-get update && apt-get install -y --no-install-recommends \
-        curl bzip2 ca-certificates libglib2.0-0 libxext6 libsm6 libxrender1 build-essential
+        curl bzip2 ca-certificates libglib2.0-0 libxext6 libsm6 libxrender1 build-essential git
 
     # 2. Micromamba
     mkdir -p /usr/local/bin
