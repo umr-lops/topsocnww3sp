@@ -341,7 +341,7 @@ def batch_process_safes(
                 logger.exception(
                     "Failed to process %s (exit code %s)", safe_dir.name, e.code
                 )
-        except Exception as e:
+        except (OSError, ValueError, TypeError) as e:
             error_msg = str(e)
             if "No WW3 data within time window" in error_msg:
                 stats["failed_temporal_match"] += 1
