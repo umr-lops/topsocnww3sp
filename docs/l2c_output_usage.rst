@@ -21,7 +21,7 @@ Since the product is stored in NetCDF groups, you can load it using ``xarray``:
 Comparing SAR and Model
 -----------------------
 
-The primary use of the L2C product is to compare observed ocean wave characteristics from S1 OSW with model spectra from WW3. 
+The primary use of the L2C product is to compare observed ocean wave characteristics from S1 OSW with model spectra from WW3.
 
 In ``lasso`` mode, you can iterate through all extracted spectra for a given subswath and perform spatial analysis or compute statistics within the footprint.
 

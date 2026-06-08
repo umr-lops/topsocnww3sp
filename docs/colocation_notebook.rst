@@ -30,9 +30,9 @@ Example snippet for visualization:
     # Plotting map
     fig = plt.figure(figsize=(10, 6))
     ax = plt.axes(projection=ccrs.PlateCarree())
-    
+
     # The SAR tiles can be plotted as points or polygons
-    ax.scatter(ds_sar.oswLon, ds_sar.oswLat, c='blue', label='SAR Tiles')
-    ax.scatter(ds_ww3.longitude, ds_ww3.latitude, c='red', label='WW3 Spectra')
+    ax.scatter(ds_sar.oswLon, ds_sar.oswLat, c="blue", label="SAR Tiles")
+    ax.scatter(ds_ww3.longitude, ds_ww3.latitude, c="red", label="WW3 Spectra")
     ax.legend()
     plt.show()

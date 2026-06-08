@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import importlib.metadata
 from typing import Any
 
 project = "topsocnww3sp"

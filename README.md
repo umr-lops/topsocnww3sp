@@ -35,6 +35,8 @@ Swell Wave) data with WW3 (WaveWatch III) wave model spectra. The
 co-localization can be performed using different matching strategies depending
 on the scientific use case.
 
+![Example of 1to1 SAR/WW3 colocation](docs/coloc_1to1_llustration.png)
+
 ## Features
 
 - **Multiple matching modes**:

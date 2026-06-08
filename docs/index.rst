@@ -5,6 +5,12 @@ TOPSOCNWW3SP Documentation
 
 Welcome to the TOPSOCNWW3SP documentation. This project provides tools for colocalizing SAR and WW3 spectral data.
 
+.. image:: coloc_1to1_llustration.png
+   :alt: Example of 1to1 SAR/WW3 colocation
+   :align: center
+   :width: 80%
+
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
