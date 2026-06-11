@@ -1,49 +1,19 @@
 name: CD
 
 on:
-  workflow_dispatch:
-  pull_request:
-  push:
-    branches:
-      - main
   release:
-    types:
-      - published
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  FORCE_COLOR: 3
+    types: [published]
+  workflow_dispatch: # optionnel pour déclenchement manuel
 
 jobs:
-  dist:
-    name: Distribution build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - uses: hynek/build-and-inspect-python-package@v2
-
   publish:
-    needs: [dist]
     name: Publish to PyPI
+    runs-on: ubuntu-latest
     environment: pypi
     permissions:
       id-token: write
       contents: read
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
-
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: Packages
-          path: dist
-
+      - uses: actions/checkout@v6
+      - uses: hynek/build-and-inspect-python-package@v2
       - uses: pypa/gh-action-pypi-publish@release/v1
-        # Pas de repository-url -> publication sur PyPI
