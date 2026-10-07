@@ -78,7 +78,10 @@ def core_count_coverage(
     # 3. Matching Loop
     logger.info("Starting matching process...")
     for pt in tqdm(track_points, desc="Matching"):
-        t_start, t_end = pt["datetime"] - time_delta, pt["datetime"] + time_delta
+        # t_start, t_end = pt["datetime"] - time_delta, pt["datetime"] + time_delta
+        dt_naive = pt["datetime"].replace(tzinfo=None)
+        t_start = dt_naive - time_delta
+        t_end = dt_naive + time_delta
 
         # Temporal mask
         time_mask = (ww3_nc_times >= t_start) & (ww3_nc_times <= t_end)

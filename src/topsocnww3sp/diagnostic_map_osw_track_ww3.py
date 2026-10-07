@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Diagnostic map for OSW tiles, trackfile and WW3 spectra coverage."""
+"""Diagnostic map for OSW tiles, trackfile and WW3 spectra coverage.
+
+Option --sar-driven restricts analysis to the SAR footprint.
+"""
 
 import argparse
 import logging
@@ -11,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
+from shapely.geometry import MultiPoint, Point, Polygon
 
 from topsocnww3sp.count_ocn_tiles_with_ww3sp import (
     core_count_coverage,
@@ -55,6 +59,32 @@ def resolve_file_list(input_paths: list[str]) -> list[Path]:
     return resolved_files
 
 
+def build_convex_hull_from_points(lons: np.ndarray, lats: np.ndarray) -> Polygon | None:
+    """Build a convex hull polygon from longitude/latitude points.
+    Returns None if not enough points (less than 3)."""
+    points = list(zip(lons, lats, strict=True))
+    if len(points) < 3:
+        return None
+    multi_point = MultiPoint(points)
+    hull = multi_point.convex_hull
+    if hull.geom_type != "Polygon":
+        return None
+    return hull
+
+
+def filter_track_points_inside_polygon(track_points: list, polygon: Polygon) -> list:
+    """Filter a list of track dictionaries to keep only those inside the polygon."""
+    if polygon is None:
+        return track_points
+    filtered = []
+    for pt in track_points:
+        lon = pt["longitude"]
+        lat = pt["latitude"]
+        if polygon.contains(Point(lon, lat)):
+            filtered.append(pt)
+    return filtered
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Map OSW tiles, Trackfile, and WW3 spectra with stats."
@@ -66,8 +96,15 @@ def main() -> None:
     parser.add_argument("--zoom", type=int, default=8)
     parser.add_argument("--output", default="map_coverage.png")
     parser.add_argument("--config", default=None, help="Path to config.yml (optional)")
+    parser.add_argument(
+        "--sar-driven",
+        action="store_true",
+        help="Restrict analysis to the SAR footprint (convex hull of OSW tile centres)",
+    )
     args = parser.parse_args()
+
     config = get_config(path_config=args.config)
+
     # 1. Resolve and Load Files
     osw_paths = resolve_file_list(args.oswfiles)
     ww3_paths = resolve_file_list(args.ww3files)
@@ -75,14 +112,67 @@ def main() -> None:
     logger.info("Reading OSW data...")
     _, coords_osw = read_osw(args.group, osw_paths, dev=False)
 
+    # Compute SAR footprint if requested
+    sar_polygon = None
+    if args.sar_driven:
+        logger.info("Computing SAR footprint (convex hull) from tile centres...")
+        sar_polygon = build_convex_hull_from_points(
+            coords_osw["lon_osw"], coords_osw["lat_osw"]
+        )
+        if sar_polygon is None:
+            logger.warning(
+                "Could not build convex hull (less than 3 points). "
+                "Disabling SAR-driven filtering."
+            )
+            sar_polygon = None
+
     logger.info("Loading Trackfile...")
     track_points = parse_track_file(args.trackfile)
 
     logger.info("Loading WW3 data and calculating coverage...")
-    ds_ww3 = xr.open_mfdataset(ww3_paths, combine="nested", concat_dim="time")
-    ww3_lons = ds_ww3.longitude.to_numpy().flatten()
-    ww3_lats = ds_ww3.latitude.to_numpy().flatten()
-    ww3_times = pd.to_datetime(ds_ww3.time.to_numpy())
+    ds_ww3 = xr.open_mfdataset(
+        ww3_paths,
+        combine="nested",
+        concat_dim="time",
+        data_vars="all",
+    )
+    ww3_lons_orig = ds_ww3.longitude.to_numpy().flatten()
+    ww3_lats_orig = ds_ww3.latitude.to_numpy().flatten()
+    ww3_times_orig = pd.to_datetime(ds_ww3.time.to_numpy())
+
+    # Apply SAR-driven filtering if requested
+    if sar_polygon is not None:
+        logger.info("Filtering trackfile points inside SAR footprint...")
+        orig_track_count = len(track_points)
+        track_points = filter_track_points_inside_polygon(track_points, sar_polygon)
+        logger.info(
+            "Kept %d/%d track points inside SAR footprint.",
+            len(track_points),
+            orig_track_count,
+        )
+
+        logger.info("Filtering WW3 grid points inside SAR footprint...")
+        orig_ww3_count = len(ww3_lons_orig)
+        # Apply mask to original arrays
+        mask_ww3 = np.array(
+            [
+                sar_polygon.contains(Point(lon, lat))
+                for lon, lat in zip(ww3_lons_orig, ww3_lats_orig, strict=True)
+            ]
+        )
+        ww3_lons = ww3_lons_orig[mask_ww3]
+        ww3_lats = ww3_lats_orig[mask_ww3]
+        ww3_times = ww3_times_orig[mask_ww3]
+        logger.info(
+            "Kept %d/%d WW3 points inside SAR footprint.",
+            len(ww3_lons),
+            orig_ww3_count,
+        )
+    else:
+        # No filtering
+        ww3_lons = ww3_lons_orig
+        ww3_lats = ww3_lats_orig
+        ww3_times = ww3_times_orig
 
     # 2. Run logic to get summary and hit counts per point
     summary_lines, results = core_count_coverage(
@@ -93,8 +183,7 @@ def main() -> None:
     # Prepare data for plotting
     t_lons = np.array([p["longitude"] for p in track_points])
     t_lats = np.array([p["latitude"] for p in track_points])
-    # Extract hit counts in same order as lons/lats
-    t_hits = np.array([results[p["line_idx"]] for p in track_points])
+    t_hits = np.array([results.get(p["line_idx"], 0) for p in track_points])
 
     # ---------------------------------------------------------
     # FIGURE 1: OVERVIEW MAP (Coverage layers)
@@ -146,7 +235,10 @@ def main() -> None:
     )
 
     ax1.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax1.set_title(f"S1 OCN/WW3 Overview - {args.group}", fontsize=14)
+    title = f"S1 OCN/WW3 Overview - {args.group}"
+    if args.sar_driven and sar_polygon is not None:
+        title += " (SAR-driven filtering)"
+    ax1.set_title(title, fontsize=14)
 
     # Summary box on the right
     fig1.text(
@@ -171,11 +263,9 @@ def main() -> None:
     ax2.set_extent(extent, crs=ccrs.PlateCarree())
     ax2.add_image(request, args.zoom)
 
-    # Mask for zero vs positive
     mask_zero = t_hits == 0
     mask_pos = t_hits > 0
 
-    # 1. Plot 0 hits as Red
     ax2.scatter(
         t_lons[mask_zero],
         t_lats[mask_zero],
@@ -187,7 +277,6 @@ def main() -> None:
         label="0 WW3 Spectra",
     )
 
-    # 2. Plot >0 hits with graduate colors (using 'viridis' or 'plasma')
     if np.any(mask_pos):
         sc = ax2.scatter(
             t_lons[mask_pos],
@@ -200,16 +289,17 @@ def main() -> None:
             linewidth=0.5,
             label=">0 WW3 Spectra",
         )
-
-        # Add colorbar
         cbar = plt.colorbar(sc, ax=ax2, orientation="vertical", pad=0.02, aspect=30)
         cbar.set_label("Number of associated WW3 spectra", fontsize=12)
 
     ax2.legend(loc="lower left")
-    ax2.set_title(
-        f"Track Points: Hit Count Distribution\n(Red = No spectra within {config['DISTANCE_THRESHOLD_KM']}km/{config['TIME_THRESHOLD_MINUTES']}min)",
-        fontsize=14,
+    title2 = (
+        f"Track Points: Hit Count Distribution\n(Red = No spectra within "
+        f"{config['DISTANCE_THRESHOLD_KM']}km/{config['TIME_THRESHOLD_MINUTES']}min)"
     )
+    if args.sar_driven and sar_polygon is not None:
+        title2 += " [SAR-driven]"
+    ax2.set_title(title2, fontsize=14)
 
     out2 = args.output.replace(".png", "_hit_distribution.png")
     plt.savefig(out2, bbox_inches="tight")
