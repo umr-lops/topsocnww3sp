@@ -6,7 +6,6 @@ Option --sar-driven restricts analysis to the SAR footprint.
 
 import argparse
 import logging
-from pathlib import Path
 
 import cartopy.crs as ccrs
 import cartopy.io.img_tiles as cimgt
@@ -14,75 +13,22 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.geometry import Point
 
 from topsocnww3sp.count_ocn_tiles_with_ww3sp import (
     core_count_coverage,
     parse_track_file,
+)
+from topsocnww3sp.map_helpers import (
+    build_convex_hull_from_points,
+    filter_track_points_inside_polygon,
+    resolve_file_list,
 )
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
 from topsocnww3sp.utils import get_config
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
-
-
-def resolve_file_list(input_paths: list[str]) -> list[Path]:
-    """
-    Resolves a list of input paths which can be either direct file paths
-    or text files containing lists of file paths.
-
-    Args:
-        input_paths (list[str]): List of input paths. Each path can be a
-            direct file path or a text file containing multiple file paths
-            (one per line).
-
-    Returns:
-        list[Path]: A flattened list of resolved file paths.
-    """
-    resolved_files = []
-    for path_str in input_paths:
-        if path_str.endswith(".txt"):
-            path_obj = Path(path_str)
-            if not path_obj.exists():
-                logger.error("Listing file not found: %s", path_str)
-                continue
-            with path_obj.open(encoding="utf-8") as f:
-                files_from_txt = [
-                    Path(line.strip())
-                    for line in f
-                    if line.strip() and not line.startswith("#")
-                ]
-                resolved_files.extend(files_from_txt)
-        else:
-            resolved_files.append(Path(path_str))
-    return resolved_files
-
-
-def build_convex_hull_from_points(lons: np.ndarray, lats: np.ndarray) -> Polygon | None:
-    """Build a convex hull polygon from longitude/latitude points.
-    Returns None if not enough points (less than 3)."""
-    points = list(zip(lons, lats, strict=True))
-    if len(points) < 3:
-        return None
-    multi_point = MultiPoint(points)
-    hull = multi_point.convex_hull
-    if hull.geom_type != "Polygon":
-        return None
-    return hull
-
-
-def filter_track_points_inside_polygon(track_points: list, polygon: Polygon) -> list:
-    """Filter a list of track dictionaries to keep only those inside the polygon."""
-    if polygon is None:
-        return track_points
-    filtered = []
-    for pt in track_points:
-        lon = pt["longitude"]
-        lat = pt["latitude"]
-        if polygon.contains(Point(lon, lat)):
-            filtered.append(pt)
-    return filtered
 
 
 def main() -> None:
