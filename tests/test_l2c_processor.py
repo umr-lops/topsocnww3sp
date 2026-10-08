@@ -295,7 +295,15 @@ def test_process_lasso_group_success(
     assert ds_out is not None
     assert "longitude" in ds_out.variables
     assert "latitude" in ds_out.variables
-    assert ds_out.sizes["time"] > 0
+    assert ds_out.sizes["sample"] > 0
+    # WW3 observations are not a time series: the "time" dim is renamed to
+    # "sample" and the observation times become a plain data variable (#23).
+    assert "time" in ds_out.variables
+    assert ds_out["time"].dims == ("sample",)
+    assert ds_out["time"].attrs["long_name"] == "WW3 observation time (julian day, UT)"
+    # the CF time-encoding attrs are dropped so 'time' is a plain data variable
+    assert "units" not in ds_out["time"].attrs
+    assert "standard_name" not in ds_out["time"].attrs
 
 
 def test_process_lasso_group_no_temporal_match(
@@ -369,7 +377,7 @@ def test_ww3_grid_provenance_presence(
             if ds_out is not None:
                 if "ww3_grid_provenance" not in ds_out.variables:
                     ds_out["ww3_grid_provenance"] = xr.DataArray(
-                        [0] * ds_out.sizes["time"], dims="time"
+                        [0] * ds_out.sizes["sample"], dims="sample"
                     )
                 assert "ww3_grid_provenance" in ds_out.variables
         else:

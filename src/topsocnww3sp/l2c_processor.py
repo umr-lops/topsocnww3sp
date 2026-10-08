@@ -319,6 +319,15 @@ def process_lasso_group(
 
     ds_ww3_filtered = ds_ww3_subset.isel(time=spatial_mask)
 
+    # WW3 spectra are individual observations, not a time series: rename the
+    # "time" dimension to "sample" and keep the observation times as a regular
+    # "time" variable (issue #23). The CF time-encoding attrs are dropped so the
+    # variable is written as a plain datetime data variable, not a coordinate.
+    obs_time = ds_ww3_filtered["time"].rename({"time": "sample"}).copy()
+    obs_time.attrs = {"long_name": "WW3 observation time (julian day, UT)"}
+    ds_ww3_filtered = ds_ww3_filtered.rename({"time": "sample"})
+    ds_ww3_filtered["time"] = obs_time
+
     ds_ww3_filtered.attrs["sar_file"] = str(osw_path.name)
     ds_ww3_filtered.attrs["buffer_deg"] = buffer_deg
 
