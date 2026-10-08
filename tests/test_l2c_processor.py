@@ -502,7 +502,12 @@ directory_ww3spectra_output: /fake/path
         "topsocnww3sp.l2c_processor.list_osw_files_in_safe",
         lambda _: osw_paths,
     )
-    monkeypatch.setattr(Path, "mkdir", lambda *_, **__: None)
+    mkdir_calls: list[Path] = []
+
+    def fake_mkdir(self, *_, **__):
+        mkdir_calls.append(self)
+
+    monkeypatch.setattr(Path, "mkdir", fake_mkdir)
     monkeypatch.setattr(Path, "exists", lambda _: False)
     monkeypatch.setattr(Path, "unlink", lambda *_, **__: None)
     monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: dummy_ww3_ds_sparse)
@@ -539,3 +544,58 @@ directory_ww3spectra_output: /fake/path
         assert "2022" in str(path)
         assert "01" in str(path)
         assert "07" in str(path)
+    expected_dir = Path(tmp_path / "output") / "2022" / "01" / "07" / safe_dir.name
+    assert expected_dir in mkdir_calls
+
+
+@pytest.mark.parametrize("mode", ["1to1", "lasso"])
+def test_main_no_colocation_no_output_dir(
+    mode,
+    mock_safe_directory,
+    dummy_ww3_ds,
+    dummy_sar_ds_with_corners,
+    tmp_path,
+    monkeypatch,
+):
+    """When no colocation product is written, the output SAFE dir is not created."""
+    safe_dir, _ = mock_safe_directory
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(
+        'product_version: "v0.1"\n'
+        "TIME_THRESHOLD_MINUTES: 30\n"
+        "DISTANCE_THRESHOLD_KM: 20\n"
+        "BUFFER_DEG: 0.1\n"
+        "directory_ww3spectra_output: /fake/path\n"
+    )
+
+    mock_args = Mock(spec=argparse.Namespace)
+    mock_args.ocn_safe = str(safe_dir)
+    mock_args.ww3_file = "dummy_ww3.nc"
+    mock_args.config = config_file
+    mock_args.mode = mode
+    mock_args.verbose = False
+    mock_args.output_dir = str(tmp_path / "output")
+    mock_args.overwrite = False
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda _: mock_args)
+    if mode == "1to1":
+        # SAR loads but WW3 is temporally far -> no match
+        far_ww3 = dummy_ww3_ds.assign_coords(
+            time=pd.date_range("2025-01-01 00:00", periods=5, freq="h")
+        )
+        monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: far_ww3)
+        monkeypatch.setattr(
+            "topsocnww3sp.l2c_processor.read_osw",
+            lambda *_, **__: (dummy_sar_ds_with_corners, None),
+        )
+    else:
+        # SAR loading fails and no WW3 points inside the footprint
+        monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: dummy_ww3_ds)
+        monkeypatch.setattr(
+            "topsocnww3sp.l2c_processor.read_osw", lambda *_, **__: (None, None)
+        )
+
+    main()
+
+    out_safe = tmp_path / "output" / "2022" / "01" / "07" / safe_dir.name
+    assert not out_safe.exists()

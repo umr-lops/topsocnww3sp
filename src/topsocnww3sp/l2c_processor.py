@@ -388,6 +388,10 @@ def write_output_file(
     match_groups: list[tuple[str, xr.Dataset]] | None = None,
 ) -> None:
     """Write a complete L2C output file with global attributes and groups."""
+    # Create the output directory only when a file is actually written, so no
+    # empty SAFE directory is left behind when no colocation data is extracted.
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Initialize file with global attributes
     xr.Dataset(attrs=global_attrs).to_netcdf(output_path, mode="w")
 
@@ -471,8 +475,9 @@ def main() -> None:
     year = sar_start.strftime("%Y")
     month = sar_start.strftime("%m")
     day = sar_start.strftime("%d")
+    # The output directory is created lazily by write_output_file, only when a
+    # colocation product is actually written (issue #15).
     output_base_dir = Path(args.output_dir) / year / month / day / safe_name
-    output_base_dir.mkdir(parents=True, exist_ok=True)
 
     # Load WW3 data once for all subswaths
     ww3_path = args.ww3_file or find_ww3_file(sar_start, config)
