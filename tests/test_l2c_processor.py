@@ -15,6 +15,8 @@ import xarray as xr
 import yaml
 
 from topsocnww3sp.l2c_processor import (
+    _COMPRESSION_LEVEL,
+    _compression_encoding,
     create_global_attributes,
     find_ww3_file,
     list_osw_files_in_safe,
@@ -22,6 +24,7 @@ from topsocnww3sp.l2c_processor import (
     normalize_corner_arrays,
     process_group,
     process_lasso_group,
+    write_output_file,
 )
 from topsocnww3sp.utils import load_ww3_field, load_ww3_multi_grid
 
@@ -625,6 +628,58 @@ directory_ww3spectra_output: /fake/path
         assert "07" in str(path)
     expected_dir = Path(tmp_path / "output") / "2022" / "01" / "07" / safe_dir.name
     assert expected_dir in mkdir_calls
+
+
+# --- NetCDF zlib compression (issue #25) ---
+
+
+def test_compression_encoding_targets_large_arrays_only():
+    """_compression_encoding sets zlib only on numeric arrays >= the byte floor."""
+    small = np.arange(8, dtype="f8")  # 64 B -> below the floor
+    large = np.zeros(4096, dtype="f4")  # 16384 B -> above the floor
+    ds = xr.Dataset(
+        {
+            "oswHs": (["tiles"], small),
+            "oswCoh": (["x"], large),
+        },
+        coords={"tiles": np.arange(8), "x": np.arange(4096)},
+    )
+
+    enc = _compression_encoding(ds)
+
+    assert "oswHs" not in enc
+    assert enc["oswCoh"] == {"zlib": True, "complevel": _COMPRESSION_LEVEL}
+
+
+@pytest.mark.filterwarnings(
+    "ignore:Setting the shape on a NumPy array:DeprecationWarning"
+)
+def test_write_output_file_compresses_large_arrays_only(tmp_path):
+    """write_output_file zlib-compresses large spectral arrays, not small ones."""
+    big = np.random.default_rng(0).random((200, 100)).astype("f4")  # 80000 B
+    small = np.arange(200, dtype="f4")  # 800 B
+    ds_sar = xr.Dataset(
+        {"oswCoh": (["tiles", "kybin"], big), "oswHs": (["tiles"], small)},
+        coords={"tiles": np.arange(200), "kybin": np.arange(100)},
+    )
+    ds_match = xr.Dataset(
+        {"distance_km": (["pair"], np.array([1.0, 2.0, 3.0]))},
+        coords={"pair": np.arange(3)},
+    )
+    out = tmp_path / "product.nc"
+    write_output_file(
+        out,
+        {"title": "t"},
+        [("SAR_intraburst", ds_sar)],
+        [],
+        [("MATCH_MAP_intraburst", ds_match)],
+    )
+
+    with xr.open_dataset(out, group="SAR_intraburst") as g:
+        assert g["oswCoh"].encoding.get("zlib") is True
+        assert g["oswCoh"].encoding.get("complevel") == _COMPRESSION_LEVEL
+        # the small per-tile vector is left uncompressed
+        assert g["oswHs"].encoding.get("zlib") is False
 
 
 @pytest.mark.parametrize("mode", ["1to1", "lasso"])
