@@ -15,7 +15,7 @@ import yaml
 from shapely.geometry import MultiPoint, Point
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
-from topsocnww3sp.utils import haversine, load_ww3_multi_grid
+from topsocnww3sp.utils import haversine, load_ww3_field, load_ww3_multi_grid
 
 logger = logging.getLogger(__name__)
 
@@ -339,8 +339,20 @@ def create_global_attributes(
     sar_filename: str,
     product_version: str,
     mode: str,
+    ww3_field_vars: list[str] | None = None,
 ) -> dict[str, str]:
-    """Create CF-compliant global attributes for the L2C product."""
+    """Create CF-compliant global attributes for the L2C product.
+
+    Args:
+        sar_filename: Name of the SAR OSW file
+        product_version: Product version string
+        mode: Processing mode
+        ww3_field_vars: Optional list of WW3 FIELD (integrated parameter)
+            variable names included in the product, to note in the comment
+
+    Returns:
+        Dictionary of global attributes
+    """
     try:
         pkg_version = importlib.metadata.version("topsocnww3sp")
     except importlib.metadata.PackageNotFoundError:
@@ -351,6 +363,12 @@ def create_global_attributes(
     subswath = parts[1].upper() if len(parts) > 1 else "UNKNOWN"
     polarization = parts[2].upper() if len(parts) > 2 else "UNKNOWN"
     now_str = datetime.now(tz=timezone.utc).isoformat()
+
+    field_note = ""
+    if ww3_field_vars:
+        field_note = " WW3 integrated parameters from FIELD files: " + ", ".join(
+            ww3_field_vars
+        )
 
     return {
         "Conventions": "CF-1.8",
@@ -364,7 +382,7 @@ def create_global_attributes(
         "history": f"{now_str} - Created by topsocnww3sp version {pkg_version}",
         "source": f"Sentinel-1 {mission} OSW product: {Path(sar_filename).name}",
         "references": "https://github.com/umr-lops/topsocnww3sp",
-        "comment": f"Co-localization mode: {mode}",
+        "comment": f"Co-localization mode: {mode}.{field_note}",
         "license": "CC-BY-4.0",
         "product_id": product_version,
         "package_version": pkg_version,
@@ -503,6 +521,24 @@ def main() -> None:
         logger.info("Single-file mode: loading WW3 data from %s", ww3_path_obj)
         ds_ww3 = xr.open_dataset(ww3_path_obj)
 
+    # Sample WW3 FIELD (integrated parameter) variables at the track points so
+    # that each spectrum carries its own integrated parameters on the same
+    # dimension (issue #20). Never fatal: the product is built without them.
+    ww3_field_vars: list[str] = []
+    try:
+        field_vars = load_ww3_field(ww3_path_obj, ds_ww3, config)
+    except (OSError, ValueError, KeyError) as exc:
+        logger.warning(
+            "Failed to load WW3 FIELD variables, continuing without them: %s", exc
+        )
+        field_vars = {}
+    if field_vars:
+        ds_ww3 = ds_ww3.copy()
+        for field_name, field_var in field_vars.items():
+            ds_ww3[field_name] = field_var
+        ww3_field_vars = sorted(field_vars)
+        logger.info("Loaded WW3 FIELD variables: %s", ", ".join(ww3_field_vars))
+
     groups = ["intraburst", "interburst"]
 
     # Process each OSW file (one per subswath)
@@ -522,7 +558,7 @@ def main() -> None:
             output_path.unlink()
 
         global_attrs = create_global_attributes(
-            osw_file.name, product_version, args.mode
+            osw_file.name, product_version, args.mode, ww3_field_vars
         )
 
         if args.mode == "lasso":
