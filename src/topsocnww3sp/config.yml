@@ -15,3 +15,37 @@ ww3_grids:
   midlatitude:
     pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
     name: "midlatitude"
+# WW3 FIELD (integrated parameters) grids - relative to ww3dir, keys must match ww3_grids
+# so that each track point is sampled from the FIELD file of its own provenance grid
+# (issue #20). Grid keys not listed here are left with NaN field values.
+ww3_field_grids:
+  arctic:
+    pattern: "ARC-*/YYYY-*/FIELD_NC/WW3-ARC-*_*.nc"
+  antarctic:
+    pattern: "ANTARC-*/YYYY-*/FIELD_NC/WW3-ANTARC-*_*.nc"
+  midlatitude:
+    pattern: "IRIGLOB-*/YYYY-*/FIELD_NC/WW3-IRIGLOB-*_*.nc"
+# WW3 FIELD variables to sample at the track points. The FIELD variable name is
+# preserved as the output name (e.g. ``hs`` stays ``hs``). The list is
+# data-driven: new FIELD variables only require a config entry (issue #20).
+ww3_field_variables:
+  hs:
+    attrs:
+      long_name: "WW3 significant height of wind and swell waves (total SWH)"
+      units: "m"
+      standard_name: "sea_surface_wave_significant_height"
+  vhm0:
+    attrs:
+      long_name: "WW3 significant height of wind and swell waves (total SWH)"
+      units: "m"
+      standard_name: "sea_surface_wave_significant_height"
+  vtm02:
+    attrs:
+      long_name: "WW3 mean wave period from the second-order moment (Tm2)"
+      units: "s"
+      standard_name: "sea_surface_wave_mean_period"
+  vtm01:
+    attrs:
+      long_name: "WW3 zero-crossing mean wave period (Tm01)"
+      units: "s"
+      standard_name: "sea_surface_wave_zero_upcrossing_mean_period"

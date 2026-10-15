@@ -40,3 +40,33 @@ The YAML config file should contain at least the following keys:
     TIME_THRESHOLD_MINUTES: 30
     DISTANCE_THRESHOLD_KM: 14
     product_version: v0.1
+
+    # WW3 FIELD (integrated parameters) configuration. Keys must match the
+    # ww3_grids keys so each track point is sampled from its own grid.
+    ww3_field_grids:
+      arctic:
+        pattern: "ARC-*/YYYY-*/FIELD_NC/WW3-ARC-*_*.nc"
+      midlatitude:
+        pattern: "IRIGLOB-*/YYYY-*/FIELD_NC/WW3-IRIGLOB-*_*.nc"
+    # WW3 FIELD variables to sample. The FIELD variable name is preserved as
+    # the output name (hs stays hs).
+    ww3_field_variables:
+      hs:
+        attrs:
+          long_name: "WW3 significant height of wind and swell waves (total SWH)"
+          units: "m"
+          standard_name: "sea_surface_wave_significant_height"
+
+Plotting the WW3 Integrated Parameters
+--------------------------------------
+
+A standalone script in the ``end2end`` directory renders the WW3 integrated
+parameters (e.g. ``hs``) sampled at the track points of an L2C SAFE as a
+geographic map. Pass the output SAFE directory: all subswaths (IW1/IW2/IW3) are
+drawn on the same map.
+
+.. code-block:: bash
+
+    python end2end/plot_ww3_hs_map_l2c.py \
+        --input-l2c-safe /path/to/SAFE_output_dir \
+        --output-png ww3_hs_map.png

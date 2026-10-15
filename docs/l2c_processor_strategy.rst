@@ -118,6 +118,39 @@ Particularly suited to subswath-level spectral studies and cases where the
 WW3 grid is coarser than the SAR tile grid.
 
 
+Sampling the WW3 Integrated (FIELD) Parameters
+----------------------------------------------
+
+The integrated parameters (total SWH, Tm2, Tm01 and, in the future,
+partitioned quantities) live in the WW3 **FIELD** files, which are 2-D gridded
+fields at each hour, as opposed to the **TRACK** files that hold one spectrum
+per grid cell. To attach one integrated value to every spectrum, the processor
+samples the FIELD grid at each track point.
+
+The sampling strategy is deliberately simple and unambiguous:
+
+- **Order:** the WW3 track spectra are loaded first; the FIELD files are then
+  sampled at those already-loaded track points and merged onto the same
+  dataset. The integrated parameters therefore always inherit the spectra
+  dimension (``sample`` in lasso mode).
+- **Per-provenance-grid sampling:** every track point belongs to exactly one
+  WW3 grid (recorded by ``ww3_grid_provenance``). Each point is sampled only
+  from the FIELD file of **its own** grid, so a spectrum never receives values
+  from the other sub-grids (Arctic / mid-latitude / Antarctic). There is exactly
+  one value per spectrum per parameter — no cross-grid ambiguity.
+- **Spatial matching:** the nearest FIELD grid node to the track point, found
+  in the grid's native coordinates (a KD-tree over longitude/latitude with a
+  date-line-aware search). A maximum distance (``ww3_field_max_distance_deg``,
+  default ``0.25°``) guards against accidental matches far from the point.
+- **Temporal matching:** the nearest FIELD hour within
+  ``TIME_THRESHOLD_MINUTES`` of the track point time.
+- **Graceful degradation:** if a grid has no FIELD file, or a point has no
+  matching grid node / hour, that point keeps NaN. The product is built
+  without failing, and a warning is logged.
+
+This keeps the NetCDF output flat and easy to consume: for each WW3 spectrum,
+the integrated parameters sit right next to the spectrum on the same index.
+
 Storage Considerations
 ----------------------
 
