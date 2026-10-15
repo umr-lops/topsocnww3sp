@@ -4,6 +4,7 @@
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -661,7 +662,7 @@ def _make_field_file(
     ds.to_netcdf(path, engine="scipy")
 
 
-def _field_config() -> dict:
+def _field_config() -> dict[str, object]:
     """Config for the synthetic FIELD grid layout (run root passed separately)."""
     return {
         "TIME_THRESHOLD_MINUTES": 30,
@@ -936,7 +937,7 @@ directory_ww3spectra_output: /fake/path
 
     # the FIELD loader was invoked on the track dataset
     assert captured["called"] is True
-    assert "hs" not in captured["tracks"].variables
+    assert "hs" not in cast("xr.Dataset", captured["tracks"]).variables
     # the WW3 group written to the product carries the field variable on the
     # same dimension as the spectra
     assert "hs" in written["ww3"].variables
