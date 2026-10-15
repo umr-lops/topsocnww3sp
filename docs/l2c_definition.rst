@@ -50,15 +50,15 @@ attributes. When a FIELD file or a matching grid point / time is unavailable,
 the corresponding value is set to NaN (the product is never failed).
 
 The figure below shows ``hs`` (sampled from the WW3 FIELD files) plotted on a
-geographic map alongside the SAR subswath footprint, for one subswath of a
-lasso product:
+geographic map alongside the SAR subswath footprints, for all the subswaths of
+a lasso product:
 
 .. figure:: ../end2end/figures/ww3_hs_map_lasso.png
    :align: center
-   :alt: WW3 significant wave height (hs) sampled at the WW3 track points within a SAR subswath footprint
+   :alt: WW3 significant wave height (hs) sampled at the WW3 track points of all subswaths of a lasso product
 
-   WW3 significant wave height (``hs``) sampled at the WW3 track points within
-   the buffered SAR subswath footprint (lasso mode).
+   WW3 significant wave height (``hs``) sampled at the WW3 track points of all
+   subswaths, each within its buffered SAR subswath footprint (lasso mode).
 
 File Naming Convention
 ----------------------

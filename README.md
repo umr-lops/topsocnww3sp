@@ -172,21 +172,22 @@ Each output NetCDF file contains:
 
 - `SAR_intraburst` group: Original SAR OSW data
 - `SAR_interburst` group: Interburst SAR data
-- `WW3` group: Filtered WW3 spectra (lasso mode), including the WW3
-  integrated parameters (e.g. `hs`) sampled from the FIELD files on the
-  same `sample` dimension as the spectra
+- `WW3` group: Filtered WW3 spectra (lasso mode), including the WW3 integrated
+  parameters (e.g. `hs`) sampled from the FIELD files on the same `sample`
+  dimension as the spectra
 - `MATCH_MAP` group: Association table (other modes)
 
 ## Visualization Tools
 
 ### WW3 integrated parameters map (end-to-end)
 
-A standalone script renders the WW3 integrated parameters (e.g. `hs`) sampled
-at the track points of a L2C file as a geographic map:
+A standalone script renders the WW3 integrated parameters (e.g. `hs`) sampled at
+the track points of an L2C SAFE as a geographic map. Pass the output SAFE
+directory: all subswaths (IW1/IW2/IW3) are drawn on the same map.
 
 ```bash
 python end2end/plot_ww3_hs_map_l2c.py \
-  --input-l2c-safe /path/to/S1..._v1.0.nc \
+  --input-l2c-safe /path/to/SAFE_output_dir \
   --output-png ww3_hs_map.png
 ```
 
