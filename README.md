@@ -48,6 +48,10 @@ on the scientific use case.
 - **Multi-grid WW3 support**: Handles IRI configuration with Arctic, Antarctic
   and mid-latitude grids
 
+- **WW3 integrated parameters**: Samples total (and, when available,
+  partitioned) SWH, Tm2 and Tm01 from the WW3 FIELD files, attaching one value
+  per spectrum on the same dimension as the spectra
+
 - **CF-compliant NetCDF output**: L2C products with full metadata and provenance
   tracking
 
@@ -102,6 +106,27 @@ ww3_grids:
     pattern: "ANTARC-*/YYYY-*/TRACK_NC/WW3-ANTARC-*_*_trck.nc"
   midlatitude:
     pattern: "IRIGLOB-*/YYYY-*/TRACK_NC/WW3-IRIGLOB-*_*_trck.nc"
+
+# WW3 FIELD (integrated parameters) configuration.
+# Each key must match a ww3_grids key so that a track point is sampled from the
+# FIELD file of its own provenance grid. Grids not listed keep NaN field values.
+ww3_field_grids:
+  arctic:
+    pattern: "ARC-*/YYYY-*/FIELD_NC/WW3-ARC-*_*.nc"
+  antarctic:
+    pattern: "ANTARC-*/YYYY-*/FIELD_NC/WW3-ANTARC-*_*.nc"
+  midlatitude:
+    pattern: "IRIGLOB-*/YYYY-*/FIELD_NC/WW3-IRIGLOB-*_*.nc"
+
+# WW3 FIELD variables to sample at the track points. The FIELD variable name is
+# preserved as the output name (hs stays hs). Data-driven: new FIELD variables
+# only require a config entry.
+ww3_field_variables:
+  hs:
+    attrs:
+      long_name: "WW3 significant height of wind and swell waves (total SWH)"
+      units: "m"
+      standard_name: "sea_surface_wave_significant_height"
 ```
 
 ## Usage
@@ -147,10 +172,23 @@ Each output NetCDF file contains:
 
 - `SAR_intraburst` group: Original SAR OSW data
 - `SAR_interburst` group: Interburst SAR data
-- `WW3` group: Filtered WW3 spectra (lasso mode)
+- `WW3` group: Filtered WW3 spectra (lasso mode), including the WW3
+  integrated parameters (e.g. `hs`) sampled from the FIELD files on the
+  same `sample` dimension as the spectra
 - `MATCH_MAP` group: Association table (other modes)
 
 ## Visualization Tools
+
+### WW3 integrated parameters map (end-to-end)
+
+A standalone script renders the WW3 integrated parameters (e.g. `hs`) sampled
+at the track points of a L2C file as a geographic map:
+
+```bash
+python end2end/plot_ww3_hs_map_l2c.py \
+  --input-l2c-safe /path/to/S1..._v1.0.nc \
+  --output-png ww3_hs_map.png
+```
 
 ### Interactive GIF animation
 
