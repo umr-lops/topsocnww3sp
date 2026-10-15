@@ -84,7 +84,7 @@ def read_osw(
     concatosw2 = [
         oo.isel({"oswKyBinSize": slice(0, min_kybinsize)}) for oo in concatosw
     ]
-    fat_osw = xr.concat(concatosw2, dim="subswath", join="outer")
+    fat_osw = xr.concat(concatosw2, dim="tiles", join="outer")
 
     return fat_osw, coords_osw
 

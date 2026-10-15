@@ -19,6 +19,7 @@ from topsocnww3sp.l2c_processor import (
     find_ww3_file,
     list_osw_files_in_safe,
     main,
+    normalize_corner_arrays,
     process_group,
     process_lasso_group,
 )
@@ -96,26 +97,25 @@ def dummy_sar_ds_with_corners():
     """Create a dummy SAR dataset with proper corner coordinates."""
     ra = np.arange(2)
     az = np.arange(3)
-    sub = [0]
     rng = np.random.default_rng()
 
     lon_center = -5.0
     lat_center = 48.0
 
-    lon_corners = np.zeros((1, 2, 3, 4))
-    lat_corners = np.zeros((1, 2, 3, 4))
+    lon_corners = np.zeros((2, 3, 4))
+    lat_corners = np.zeros((2, 3, 4))
 
     for i in range(2):
         for j in range(3):
             offset_lon = (i - 0.5) * 0.2
             offset_lat = (j - 1) * 0.15
-            lon_corners[0, i, j, :] = [
+            lon_corners[i, j, :] = [
                 lon_center + offset_lon - 0.1,
                 lon_center + offset_lon + 0.1,
                 lon_center + offset_lon + 0.1,
                 lon_center + offset_lon - 0.1,
             ]
-            lat_corners[0, i, j, :] = [
+            lat_corners[i, j, :] = [
                 lat_center + offset_lat - 0.1,
                 lat_center + offset_lat - 0.1,
                 lat_center + offset_lat + 0.1,
@@ -125,28 +125,27 @@ def dummy_sar_ds_with_corners():
     ds = xr.Dataset(
         data_vars={
             "oswLon": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                np.full((1, 2, 3), lon_center),
+                ["oswRaSize", "oswAzSize"],
+                np.full((2, 3), lon_center),
             ),
             "oswLat": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                np.full((1, 2, 3), lat_center),
+                ["oswRaSize", "oswAzSize"],
+                np.full((2, 3), lat_center),
             ),
             "oswHs": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                rng.random((1, 2, 3)).astype("f4"),
+                ["oswRaSize", "oswAzSize"],
+                rng.random((2, 3)).astype("f4"),
             ),
             "oswLongitudeCorner": (
-                ["subswath", "oswRaSize", "oswAzSize", "oswCellCorner"],
+                ["oswRaSize", "oswAzSize", "oswCellCorner"],
                 lon_corners,
             ),
             "oswLatitudeCorner": (
-                ["subswath", "oswRaSize", "oswAzSize", "oswCellCorner"],
+                ["oswRaSize", "oswAzSize", "oswCellCorner"],
                 lat_corners,
             ),
         },
         coords={
-            "subswath": sub,
             "oswRaSize": ra,
             "oswAzSize": az,
             "oswCellCorner": [0, 1, 2, 3],
@@ -259,6 +258,8 @@ def test_process_group_modes(
     assert ds_sar is not None
     assert ds_ww3 is not None
     assert ds_match is not None
+    # No vestigial size-1 subswath dimension in the SAR output (issue #22)
+    assert "subswath" not in ds_sar.dims
 
 
 def test_process_group_no_temporal_match(
@@ -356,6 +357,67 @@ def test_process_lasso_group_no_sar_data(mock_config):
         )
 
     assert ds_out is None
+
+
+# --- normalize_corner_arrays (corner layout handling, issue #22) ---
+
+
+def _corner_arrays(shape: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray]:
+    """Deterministic corner arrays of the requested shape."""
+    rng = np.random.default_rng(0)
+    lon = rng.random(shape) - 5.0
+    lat = rng.random(shape) + 47.0
+    return lon, lat
+
+
+def _normalize(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """normalize_corner_arrays, asserting the layout is recognized."""
+    out = normalize_corner_arrays(lon, lat)
+    assert out is not None
+    return out
+
+
+def test_normalize_corner_arrays_tiles_corner():
+    """(tiles, corner) layout is returned unchanged."""
+    lon, lat = _corner_arrays((6, 4))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon is lon
+    assert out_lat is lat
+    assert out_lon.shape == (6, 4)
+
+
+def test_normalize_corner_arrays_corner_tiles():
+    """(corner, tiles) layout is transposed to (tiles, corner)."""
+    lon, lat = _corner_arrays((4, 6))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.T)
+
+
+def test_normalize_corner_arrays_stacked_corner_last():
+    """(ra, az, corner) 3-D layout is flattened to (tiles, corner)."""
+    lon, lat = _corner_arrays((2, 3, 4))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.reshape(-1, 4))
+
+
+def test_normalize_corner_arrays_stacked_corner_first():
+    """(corner, ra, az) 3-D layout is transposed/flattened to (tiles, corner)."""
+    lon, lat = _corner_arrays((4, 2, 3))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.reshape(4, -1).T)
+
+
+@pytest.mark.parametrize("shape", [(6, 5), (2, 3, 5), (6,)])
+def test_normalize_corner_arrays_unrecognized(shape):
+    """Layouts with no axis of length 4 are rejected (returns None)."""
+    lon, lat = _corner_arrays(shape)
+    assert normalize_corner_arrays(lon, lat) is None
 
 
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many", "lasso"])
@@ -536,9 +598,13 @@ directory_ww3spectra_output: /fake/path
 
     saved_paths = []
     written_files = set()
+    written_groups: dict[str, xr.Dataset] = {}
 
     def mock_to_netcdf(_, path, _mode="w", _group=None, **_kwargs):
         """Mock to_netcdf method - accepts all standard arguments."""
+        group = _group if _group is not None else _kwargs.get("group")
+        if group is not None:
+            written_groups[group] = _
         if path not in written_files:
             written_files.add(path)
             saved_paths.append(path)
@@ -548,6 +614,9 @@ directory_ww3spectra_output: /fake/path
     main()
 
     assert len(saved_paths) == len(osw_paths)
+    # No vestigial size-1 subswath dimension in the SAR groups (issue #22)
+    assert "SAR_intraburst" in written_groups
+    assert "subswath" not in written_groups["SAR_intraburst"].dims
     for path in saved_paths:
         assert path.name.endswith("_v0.1.nc")
         assert "output" in str(path)
