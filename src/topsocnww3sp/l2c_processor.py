@@ -106,19 +106,13 @@ def process_group(
     # fat_osw["time"] = sar_start
     fat_osw["time"] = np.datetime64(sar_start.replace(tzinfo=None), "ns")
 
-    # First reset the existing MultiIndex on tiles, then stack all spatial dims flat
+    # Flatten the tiles MultiIndex to a single dim. Each OSW file is a single
+    # subswath, so no extra subswath dimension is needed (issue #22).
     ds_reset = fat_osw.reset_index("tiles")
-    # PD013: stack is fine here, we keep it
-    ds_stacked = ds_reset.stack(all_tiles=("subswath", "tiles"))  # noqa: PD013
+    ds_stacked = ds_reset.rename({"tiles": "all_tiles"})
     valid_mask = ~np.isnan(ds_stacked["oswLon"].to_numpy())
     sar_flat = ds_stacked.isel(all_tiles=valid_mask)
-    sar_flat = sar_flat.reset_index("tiles", drop=True)
-    if "subswath" in sar_flat.dims:
-        sar_flat = sar_flat.drop_vars("subswath")
-    if "all_tiles" in sar_flat.dims:
-        sar_flat = sar_flat.reset_index("all_tiles").assign_coords(
-            all_tiles=np.arange(len(sar_flat.all_tiles))
-        )
+    sar_flat = sar_flat.assign_coords(all_tiles=np.arange(len(sar_flat.all_tiles)))
     n_tiles = len(sar_flat.all_tiles)
 
     # 2. Temporal Filter WW3
@@ -229,7 +223,7 @@ def process_group(
     else:
         return None, None, None
 
-    ds_sar = sar_flat.reset_index("all_tiles").assign_coords(all_tiles=tile_coords)
+    ds_sar = sar_flat.assign_coords(all_tiles=tile_coords)
 
     return ds_sar, ds_ww3_out, ds_match
 
@@ -263,28 +257,29 @@ def process_lasso_group(
     ww3_lats = ds_ww3_subset.latitude.to_numpy()
     buffer_deg = config.get("BUFFER_DEG", 0.1)
 
-    # 3. Extract corners - handle shape (subswath, corner, tiles)
+    # 3. Extract corners - handle shape (tiles, corner), (corner, tiles) or
+    # higher-dim layouts (..., corner) / (corner, ...)
     lon_corners = fat_osw["oswLongitudeCorner"].to_numpy()
     lat_corners = fat_osw["oswLatitudeCorner"].to_numpy()
 
     logger.debug("Corner array shape:  %s", lon_corners.shape)
 
     # Handle different possible structures
-    if lon_corners.ndim == 3:
-        if lon_corners.shape[0] == 1 and lon_corners.shape[1] == 4:
-            lon_corners = lon_corners[0]
-            lat_corners = lat_corners[0]
-
-        if lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
-            lon_corners = lon_corners.T
-            lat_corners = lat_corners.T
-
-    elif lon_corners.ndim == 4:
-        lon_corners = lon_corners.reshape(-1, 4)
-        lat_corners = lat_corners.reshape(-1, 4)
-
+    if lon_corners.ndim > 2:
+        if lon_corners.shape[-1] == 4:
+            lon_corners = lon_corners.reshape(-1, 4)
+            lat_corners = lat_corners.reshape(-1, 4)
+        elif lon_corners.shape[0] == 4:
+            lon_corners = lon_corners.reshape(4, -1).T
+            lat_corners = lat_corners.reshape(4, -1).T
+        else:
+            logger.error("Unexpected corner array shape: %s", lon_corners.shape)
+            return None
     elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
         pass
+    elif lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
+        lon_corners = lon_corners.T
+        lat_corners = lat_corners.T
     else:
         logger.error("Unexpected corner array shape: %s", lon_corners.shape)
         return None
