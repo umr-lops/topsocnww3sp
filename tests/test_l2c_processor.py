@@ -96,26 +96,25 @@ def dummy_sar_ds_with_corners():
     """Create a dummy SAR dataset with proper corner coordinates."""
     ra = np.arange(2)
     az = np.arange(3)
-    sub = [0]
     rng = np.random.default_rng()
 
     lon_center = -5.0
     lat_center = 48.0
 
-    lon_corners = np.zeros((1, 2, 3, 4))
-    lat_corners = np.zeros((1, 2, 3, 4))
+    lon_corners = np.zeros((2, 3, 4))
+    lat_corners = np.zeros((2, 3, 4))
 
     for i in range(2):
         for j in range(3):
             offset_lon = (i - 0.5) * 0.2
             offset_lat = (j - 1) * 0.15
-            lon_corners[0, i, j, :] = [
+            lon_corners[i, j, :] = [
                 lon_center + offset_lon - 0.1,
                 lon_center + offset_lon + 0.1,
                 lon_center + offset_lon + 0.1,
                 lon_center + offset_lon - 0.1,
             ]
-            lat_corners[0, i, j, :] = [
+            lat_corners[i, j, :] = [
                 lat_center + offset_lat - 0.1,
                 lat_center + offset_lat - 0.1,
                 lat_center + offset_lat + 0.1,
@@ -125,28 +124,27 @@ def dummy_sar_ds_with_corners():
     ds = xr.Dataset(
         data_vars={
             "oswLon": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                np.full((1, 2, 3), lon_center),
+                ["oswRaSize", "oswAzSize"],
+                np.full((2, 3), lon_center),
             ),
             "oswLat": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                np.full((1, 2, 3), lat_center),
+                ["oswRaSize", "oswAzSize"],
+                np.full((2, 3), lat_center),
             ),
             "oswHs": (
-                ["subswath", "oswRaSize", "oswAzSize"],
-                rng.random((1, 2, 3)).astype("f4"),
+                ["oswRaSize", "oswAzSize"],
+                rng.random((2, 3)).astype("f4"),
             ),
             "oswLongitudeCorner": (
-                ["subswath", "oswRaSize", "oswAzSize", "oswCellCorner"],
+                ["oswRaSize", "oswAzSize", "oswCellCorner"],
                 lon_corners,
             ),
             "oswLatitudeCorner": (
-                ["subswath", "oswRaSize", "oswAzSize", "oswCellCorner"],
+                ["oswRaSize", "oswAzSize", "oswCellCorner"],
                 lat_corners,
             ),
         },
         coords={
-            "subswath": sub,
             "oswRaSize": ra,
             "oswAzSize": az,
             "oswCellCorner": [0, 1, 2, 3],
@@ -259,6 +257,8 @@ def test_process_group_modes(
     assert ds_sar is not None
     assert ds_ww3 is not None
     assert ds_match is not None
+    # No vestigial size-1 subswath dimension in the SAR output (issue #22)
+    assert "subswath" not in ds_sar.dims
 
 
 def test_process_group_no_temporal_match(
@@ -536,9 +536,13 @@ directory_ww3spectra_output: /fake/path
 
     saved_paths = []
     written_files = set()
+    written_groups: dict[str, xr.Dataset] = {}
 
     def mock_to_netcdf(_, path, _mode="w", _group=None, **_kwargs):
         """Mock to_netcdf method - accepts all standard arguments."""
+        group = _group if _group is not None else _kwargs.get("group")
+        if group is not None:
+            written_groups[group] = _
         if path not in written_files:
             written_files.add(path)
             saved_paths.append(path)
@@ -548,6 +552,9 @@ directory_ww3spectra_output: /fake/path
     main()
 
     assert len(saved_paths) == len(osw_paths)
+    # No vestigial size-1 subswath dimension in the SAR groups (issue #22)
+    assert "SAR_intraburst" in written_groups
+    assert "subswath" not in written_groups["SAR_intraburst"].dims
     for path in saved_paths:
         assert path.name.endswith("_v0.1.nc")
         assert "output" in str(path)
