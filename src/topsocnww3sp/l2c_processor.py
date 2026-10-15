@@ -228,6 +228,44 @@ def process_group(
     return ds_sar, ds_ww3_out, ds_match
 
 
+def normalize_corner_arrays(
+    lon_corners: np.ndarray,
+    lat_corners: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Normalize SAR tile-corner arrays to shape (n_tiles, 4).
+
+    Accepts layouts (tiles, corner), (corner, tiles) and higher-dim
+    (..., corner) / (corner, ...) (issue #22: no subswath dimension).
+
+    Args:
+        lon_corners: Tile corner longitudes.
+        lat_corners: Tile corner latitudes (same shape as lon_corners).
+
+    Returns:
+        (lon_corners, lat_corners) each of shape (n_tiles, 4), or None if
+        the layout is not recognized.
+    """
+    if lon_corners.ndim > 2:
+        if lon_corners.shape[-1] == 4:
+            lon_corners = lon_corners.reshape(-1, 4)
+            lat_corners = lat_corners.reshape(-1, 4)
+        elif lon_corners.shape[0] == 4:
+            lon_corners = lon_corners.reshape(4, -1).T
+            lat_corners = lat_corners.reshape(4, -1).T
+        else:
+            logger.error("Unexpected corner array shape: %s", lon_corners.shape)
+            return None
+    elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
+        pass
+    elif lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
+        lon_corners = lon_corners.T
+        lat_corners = lat_corners.T
+    else:
+        logger.error("Unexpected corner array shape: %s", lon_corners.shape)
+        return None
+    return lon_corners, lat_corners
+
+
 def process_lasso_group(
     osw_path: Path,
     ds_ww3: xr.Dataset,
@@ -257,32 +295,15 @@ def process_lasso_group(
     ww3_lats = ds_ww3_subset.latitude.to_numpy()
     buffer_deg = config.get("BUFFER_DEG", 0.1)
 
-    # 3. Extract corners - handle shape (tiles, corner), (corner, tiles) or
-    # higher-dim layouts (..., corner) / (corner, ...)
+    # 3. Extract corners and normalize to (n_tiles, 4)
     lon_corners = fat_osw["oswLongitudeCorner"].to_numpy()
     lat_corners = fat_osw["oswLatitudeCorner"].to_numpy()
-
     logger.debug("Corner array shape:  %s", lon_corners.shape)
 
-    # Handle different possible structures
-    if lon_corners.ndim > 2:
-        if lon_corners.shape[-1] == 4:
-            lon_corners = lon_corners.reshape(-1, 4)
-            lat_corners = lat_corners.reshape(-1, 4)
-        elif lon_corners.shape[0] == 4:
-            lon_corners = lon_corners.reshape(4, -1).T
-            lat_corners = lat_corners.reshape(4, -1).T
-        else:
-            logger.error("Unexpected corner array shape: %s", lon_corners.shape)
-            return None
-    elif lon_corners.ndim == 2 and lon_corners.shape[1] == 4:
-        pass
-    elif lon_corners.ndim == 2 and lon_corners.shape[0] == 4:
-        lon_corners = lon_corners.T
-        lat_corners = lat_corners.T
-    else:
-        logger.error("Unexpected corner array shape: %s", lon_corners.shape)
+    normalized = normalize_corner_arrays(lon_corners, lat_corners)
+    if normalized is None:
         return None
+    lon_corners, lat_corners = normalized
 
     # Build all corners
     all_corners = [

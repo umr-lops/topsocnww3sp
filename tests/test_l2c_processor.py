@@ -19,6 +19,7 @@ from topsocnww3sp.l2c_processor import (
     find_ww3_file,
     list_osw_files_in_safe,
     main,
+    normalize_corner_arrays,
     process_group,
     process_lasso_group,
 )
@@ -356,6 +357,67 @@ def test_process_lasso_group_no_sar_data(mock_config):
         )
 
     assert ds_out is None
+
+
+# --- normalize_corner_arrays (corner layout handling, issue #22) ---
+
+
+def _corner_arrays(shape: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray]:
+    """Deterministic corner arrays of the requested shape."""
+    rng = np.random.default_rng(0)
+    lon = rng.random(shape) - 5.0
+    lat = rng.random(shape) + 47.0
+    return lon, lat
+
+
+def _normalize(lon: np.ndarray, lat: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """normalize_corner_arrays, asserting the layout is recognized."""
+    out = normalize_corner_arrays(lon, lat)
+    assert out is not None
+    return out
+
+
+def test_normalize_corner_arrays_tiles_corner():
+    """(tiles, corner) layout is returned unchanged."""
+    lon, lat = _corner_arrays((6, 4))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon is lon
+    assert out_lat is lat
+    assert out_lon.shape == (6, 4)
+
+
+def test_normalize_corner_arrays_corner_tiles():
+    """(corner, tiles) layout is transposed to (tiles, corner)."""
+    lon, lat = _corner_arrays((4, 6))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.T)
+
+
+def test_normalize_corner_arrays_stacked_corner_last():
+    """(ra, az, corner) 3-D layout is flattened to (tiles, corner)."""
+    lon, lat = _corner_arrays((2, 3, 4))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.reshape(-1, 4))
+
+
+def test_normalize_corner_arrays_stacked_corner_first():
+    """(corner, ra, az) 3-D layout is transposed/flattened to (tiles, corner)."""
+    lon, lat = _corner_arrays((4, 2, 3))
+    out_lon, out_lat = _normalize(lon, lat)
+    assert out_lon.shape == (6, 4)
+    assert out_lat.shape == (6, 4)
+    np.testing.assert_array_equal(out_lon, lon.reshape(4, -1).T)
+
+
+@pytest.mark.parametrize("shape", [(6, 5), (2, 3, 5), (6,)])
+def test_normalize_corner_arrays_unrecognized(shape):
+    """Layouts with no axis of length 4 are rejected (returns None)."""
+    lon, lat = _corner_arrays(shape)
+    assert normalize_corner_arrays(lon, lat) is None
 
 
 @pytest.mark.parametrize("mode", ["1to1", "unique", "many", "lasso"])
