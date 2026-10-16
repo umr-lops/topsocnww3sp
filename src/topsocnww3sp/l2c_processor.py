@@ -423,6 +423,37 @@ def create_global_attributes(
     }
 
 
+# NetCDF zlib compression for the L2C output (issue #25). Hardcoded: only the
+# large spectral arrays are compressed at level 4. Small per-tile / coordinate
+# arrays are left uncompressed because the per-chunk zlib overhead would make
+# them bigger than their raw size.
+_COMPRESSION_LEVEL = 4
+_COMPRESSION_MIN_BYTES = 4096
+
+
+def _compression_encoding(ds: xr.Dataset) -> dict[str, dict[str, Any]]:
+    """Build a NetCDF zlib encoding dict for the large arrays of ``ds``.
+
+    Numeric variables whose in-memory size is at least ``_COMPRESSION_MIN_BYTES``
+    are written with ``zlib`` at level ``_COMPRESSION_LEVEL``; the rest (small
+    per-tile vectors, coordinates, flags) are left uncompressed.
+
+    Args:
+        ds: Dataset to derive the per-variable encoding from.
+
+    Returns:
+        Mapping of variable name to its NetCDF encoding options.
+    """
+    encoding: dict[str, dict[str, Any]] = {}
+    for name, var in ds.variables.items():
+        if var.dtype.kind not in "iuf":
+            continue
+        nbytes = int(var.size * var.dtype.itemsize)
+        if nbytes >= _COMPRESSION_MIN_BYTES:
+            encoding[str(name)] = {"zlib": True, "complevel": _COMPRESSION_LEVEL}
+    return encoding
+
+
 def write_output_file(
     output_path: Path,
     global_attrs: dict[str, str],
@@ -440,18 +471,33 @@ def write_output_file(
 
     # Write SAR groups
     for group_name, ds in sar_groups:
-        ds.to_netcdf(output_path, group=group_name, mode="a")
+        ds.to_netcdf(
+            output_path,
+            group=group_name,
+            mode="a",
+            encoding=_compression_encoding(ds),
+        )
 
     # Write WW3 groups
     for group_name, ds in ww3_groups:
         ds_copy = ds.copy()
         ds_copy.encoding.clear()
-        ds_copy.to_netcdf(output_path, group=group_name, mode="a")
+        ds_copy.to_netcdf(
+            output_path,
+            group=group_name,
+            mode="a",
+            encoding=_compression_encoding(ds_copy),
+        )
 
     # Write MATCH_MAP groups if provided
     if match_groups:
         for group_name, ds in match_groups:
-            ds.to_netcdf(output_path, group=group_name, mode="a")
+            ds.to_netcdf(
+                output_path,
+                group=group_name,
+                mode="a",
+                encoding=_compression_encoding(ds),
+            )
 
 
 def main() -> None:
