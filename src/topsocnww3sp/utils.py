@@ -176,8 +176,16 @@ SPECTRAL_PARAMETERS: dict[str, dict[str, str]] = {
     },
 }
 
+# Below this spectral Hs (m) the mean periods are set to NaN: under sea ice the
+# WW3 spectra are numerically ~0 (hs_spec ~1e-21 m) and m0/m2 ratios give
+# meaningless periods (up to ~30 s). Overridable with the config key
+# ``spectral_period_min_hs``.
+SPECTRAL_PERIOD_MIN_HS = 0.01
 
-def spectral_integrated_parameters(ds: xr.Dataset) -> dict[str, xr.DataArray]:
+
+def spectral_integrated_parameters(
+    ds: xr.Dataset, min_hs_for_periods: float = SPECTRAL_PERIOD_MIN_HS
+) -> dict[str, xr.DataArray]:
     """Integrated wave parameters of each WW3 directional spectrum.
 
     With the frequency moments ``mn = sum_f sum_theta f**n E(f, theta)
@@ -190,10 +198,13 @@ def spectral_integrated_parameters(ds: xr.Dataset) -> dict[str, xr.DataArray]:
     Args:
         ds: WW3 track dataset with ``efth(<track dim>, frequency, direction)``,
             ``frequency`` and ``direction``
+        min_hs_for_periods: spectral Hs (m) under which ``tm02_spec`` and
+            ``tm0m1_spec`` are NaN (near-empty spectra, e.g. under sea ice)
 
     Returns:
         Mapping of parameter name to a DataArray on the track dimension
-        (empty if ``efth`` is missing); NaN where the spectrum is empty
+        (empty if ``efth`` is missing); NaN where the spectrum is empty, and
+        NaN periods where ``hs_spec < min_hs_for_periods``
     """
     if "efth" not in ds.variables:
         return {}
@@ -220,16 +231,22 @@ def spectral_integrated_parameters(ds: xr.Dataset) -> dict[str, xr.DataArray]:
     m_minus1 = (e_f / freq).sum("frequency")
     m0 = e_f.sum("frequency")
     m2 = (e_f * freq**2).sum("frequency")
-    valid = m0 > 0
+    hs_spec = 4.0 * np.sqrt(m0.where(m0 > 0))
+    periods_valid = hs_spec >= min_hs_for_periods
     values = {
-        "hs_spec": 4.0 * np.sqrt(m0),
-        "tm02_spec": np.sqrt(m0 / m2),
-        "tm0m1_spec": m_minus1 / m0,
+        "hs_spec": hs_spec,
+        "tm02_spec": np.sqrt(m0 / m2).where(periods_valid),
+        "tm0m1_spec": (m_minus1 / m0).where(periods_valid),
     }
     out: dict[str, xr.DataArray] = {}
     for name, val in values.items():
-        da = val.where(valid).astype("f4").transpose(track_dim)
+        da = val.astype("f4").transpose(track_dim)
         da.attrs = dict(SPECTRAL_PARAMETERS[name])
+        if name != "hs_spec":
+            da.attrs["comment"] = (
+                f"NaN where hs_spec < {min_hs_for_periods} m (near-empty "
+                "spectrum, e.g. under sea ice)"
+            )
         out[name] = da
     return out
 
