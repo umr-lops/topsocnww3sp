@@ -22,6 +22,7 @@ from topsocnww3sp.utils import (
     haversine,
     load_ww3_field,
     load_ww3_multi_grid,
+    spectral_integrated_parameters,
     spherical_centroid,
     tidy_ww3_track_dataset,
 )
@@ -621,6 +622,11 @@ def load_ww3(
         logger.info("Single-file mode: loading WW3 data from %s", ww3_path)
         ds_ww3 = xr.open_dataset(ww3_path)
     ds_ww3 = tidy_ww3_track_dataset(ds_ww3)
+
+    # Integrated parameters computed from each spectrum (DLR-3, issue #20)
+    spectral_vars = spectral_integrated_parameters(ds_ww3)
+    if spectral_vars:
+        ds_ww3 = ds_ww3.assign(spectral_vars)
 
     # Sample WW3 FIELD (integrated parameter) variables at the track points so
     # that each spectrum carries its own integrated parameters on the same

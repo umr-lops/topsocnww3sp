@@ -48,14 +48,22 @@ The YAML config file should contain at least the following keys:
         pattern: "ARC-*/YYYY-*/FIELD_NC/WW3-ARC-*_*.nc"
       midlatitude:
         pattern: "IRIGLOB-*/YYYY-*/FIELD_NC/WW3-IRIGLOB-*_*.nc"
-    # WW3 FIELD variables to sample. The FIELD variable name is preserved as
-    # the output name (hs stays hs).
+    # WW3 FIELD variables to sample at each spectrum (nearest grid node and
+    # hourly time step). The FIELD variable name is preserved as the output
+    # name (hs stays hs). The IRI FIELD files provide no wave period: Tm02 and
+    # Tm0,-1 are always integrated from the spectra (hs_spec, tm02_spec,
+    # tm0m1_spec), with no configuration needed.
     ww3_field_variables:
       hs:
         attrs:
-          long_name: "WW3 significant height of wind and swell waves (total SWH)"
+          long_name: "WW3 significant height of wind and swell waves (total SWH), from the FIELD files"
           units: "m"
           standard_name: "sea_surface_wave_significant_height"
+      ice:
+        attrs:
+          long_name: "WW3 sea ice area fraction (forcing), from the FIELD files"
+          units: "1"
+          standard_name: "sea_ice_area_fraction"
 
 Plotting the WW3 Integrated Parameters
 --------------------------------------

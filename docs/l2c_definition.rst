@@ -25,29 +25,72 @@ The output files use NetCDF groups to separate different types of information:
 WW3 Integrated Parameters
 -------------------------
 
-In addition to the 2-D wave spectrum (``efth``) and the forcing metadata, the
-``WW3`` group carries the WW3 **integrated (field) parameters** sampled from
-the WW3 FIELD files. Each spectrum is associated with exactly one value per
-integrated parameter, on the **same dimension** as the spectra (``sample`` in
-lasso mode, ``all_tiles``/``unique_ww3`` in the other modes), so a user can
-read, for every WW3 spectrum, its corresponding significant wave height and
-periods directly.
+Besides the 2-D wave spectra (``efth``) and the forcing values stored with them
+(``dpt``, ``wnd``, ``wnddir``, ``cur``, ``curdir``, ``ust``, ``ast``), the
+``WW3`` group holds **integrated parameters**. Every one of them is on the
+**same dimension as the spectra** (``sample`` in lasso mode, ``all_tiles`` /
+``unique_ww3`` in the other modes): there is exactly one value per WW3
+spectrum, so the integrated parameters follow the same lasso selection as the
+spectra and users can combine them with the SAR tiles as they wish (see
+:ref:`l2c_output_usage`). There is **no** value per SAR tile.
 
-The variables included are data-driven by the ``ww3_field_variables`` config
-list. The WW3 FIELD variable name is **preserved** as the product variable
-name (``hs`` stays ``hs``), so a user reading the product finds the same
-names as in the WW3 FIELD files. With the default configuration the product
-may contain, depending on what the FIELD files carry:
+Two WW3 outputs are used, which do not share the same points:
 
-* ``hs``: total significant wave height (m)
-* ``vtm02``: mean wave period from the second-order moment (s)
-* ``vtm01``: zero-crossing mean wave period (s)
+* **TRACK files** (``*_trck.nc``): the spectra, written by WW3 at the positions
+  and times requested by the track file (built from the SAR tiles);
+* **FIELD files**: hourly maps on the model grid (polar stereographic ~15 km
+  grids ``ARC`` / ``ANTARC``, regular 0.125 degree ``IRIGLOB`` grid between
+  35S and 35N).
 
-Partitioned quantities (e.g. wind-sea / swell) are added the same way once the
-upstream WW3 FIELD output provides them. The ``MAPSTA`` field is intentionally
-excluded. All variables carry CF ``long_name``/``units``/``standard_name``
-attributes. When a FIELD file or a matching grid point / time is unavailable,
-the corresponding value is set to NaN (the product is never failed).
+.. list-table::
+   :header-rows: 1
+   :widths: 18 12 70
+
+   * - Variable
+     - Units
+     - Definition
+   * - ``hs_spec``
+     - m
+     - Significant wave height integrated from the spectrum,
+       :math:`4\sqrt{m_0}`
+   * - ``tm02_spec``
+     - s
+     - Mean period :math:`T_{m02} = \sqrt{m_0 / m_2}`
+   * - ``tm0m1_spec``
+     - s
+     - Mean (energy) period :math:`T_{m0,-1} = m_{-1} / m_0`
+   * - ``hs``
+     - m
+     - Total significant wave height from the WW3 FIELD files
+   * - ``ice``
+     - 1
+     - Sea ice area fraction (WW3 forcing) from the WW3 FIELD files
+
+**Spectral parameters** (``*_spec``) are computed from the frequency moments of
+each spectrum,
+
+.. math::
+
+   m_n = \sum_f \sum_\theta f^n \, E(f, \theta) \, \Delta f \, \Delta\theta ,
+
+with :math:`\Delta f` = ``frequency2 - frequency1`` and
+:math:`\Delta\theta = 2\pi / N_{directions}`. They answer the DLR request
+for Tm02 and Tm0,-1, which the IRI FIELD files do not provide. Partitioned
+parameters (wind sea / swells) are not provided: they would require a
+partitioning of the spectra.
+
+**FIELD parameters** (``hs``, ``ice``) are sampled, for each spectrum, from the
+FIELD file of the grid the spectrum comes from (``ww3_grid_provenance``) at the
+**nearest grid node** (at most ``ww3_field_max_distance_deg``, default 0.25
+degree) and the **nearest hourly time step** (at most
+``TIME_THRESHOLD_MINUTES``); NaN otherwise. ``hs`` and ``hs_spec`` agree to a
+few millimetres (the FIELD ``hs`` is integrated over the same spectral
+discretisation), ``hs`` is kept for traceability with the WW3 FIELD outputs.
+The list of FIELD variables is set by ``ww3_field_variables`` in the
+configuration and the FIELD variable name is preserved in the product.
+
+All variables carry CF ``long_name`` / ``units`` / ``standard_name``
+attributes; a missing FIELD file or matching node never fails the product.
 
 The figure below shows ``hs`` (sampled from the WW3 FIELD files) plotted on a
 geographic map alongside the SAR subswath footprints, for all the subswaths of
