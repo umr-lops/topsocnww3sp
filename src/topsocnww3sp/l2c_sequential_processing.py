@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import dask
 import yaml
 
 from topsocnww3sp.l2c_processor import process_safe
@@ -262,7 +263,8 @@ def _process_one_safe(
             ww3_path=ww3_path,
             overwrite=overwrite,
         )
-    except Exception as exc:  # a failing SAFE must not stop the batch
+    # a failing SAFE must not stop the batch
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("Unexpected error processing %s", safe_dir.name)
         return str(safe_dir), f"error: {type(exc).__name__}: {exc}"[:300], 0
     return str(safe_dir), "ok" if written else "no_colocation", len(written)
@@ -274,12 +276,7 @@ def _init_worker(log_level: int) -> None:
         level=log_level,
         format="%(asctime)s - %(processName)s - %(levelname)s - %(message)s",
     )
-    try:
-        import dask  # noqa: PLC0415 - optional, only to tune the scheduler
-
-        dask.config.set(scheduler="synchronous")
-    except ImportError:
-        pass
+    dask.config.set(scheduler="synchronous")
 
 
 def batch_process_safes(

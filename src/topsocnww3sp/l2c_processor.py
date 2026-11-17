@@ -9,7 +9,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-import netCDF4
 import numpy as np
 import pandas as pd
 import xarray as xr
@@ -394,9 +393,9 @@ def read_osw_root_attrs(osw_path: Path) -> dict[str, Any]:
         Dict of root attributes (empty if the file cannot be read)
     """
     try:
-        with netCDF4.Dataset(osw_path) as nc:
-            return {k: nc.getncattr(k) for k in nc.ncattrs()}
-    except (OSError, RuntimeError) as exc:
+        with xr.open_dataset(osw_path) as ds_root:
+            return dict(ds_root.attrs)
+    except (OSError, RuntimeError, ValueError) as exc:
         logger.warning("Cannot read global attributes of %s: %s", osw_path, exc)
         return {}
 

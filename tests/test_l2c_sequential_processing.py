@@ -1,5 +1,7 @@
 """Unit tests for the l2c_sequential_processing batch runner."""
 
+import logging
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -102,3 +104,169 @@ def test_batch_process_safes_statistics(tmp_path, monkeypatch):
     assert stats["failed_other"] == 1
     assert stats["failed_no_ww3_dir"] == 1
     assert any("boom" in reason for _, reason in stats["failed_safes"])
+
+
+def test_has_track_data_flat_layout(tmp_path):
+    """A TRACK_NC directory directly below the run directory is accepted."""
+    run = tmp_path / "run"
+    (run / "TRACK_NC").mkdir(parents=True)
+    assert not seq._has_track_data(run)
+    (run / "TRACK_NC" / "x_trck.nc").touch()
+    assert seq._has_track_data(run)
+
+
+def test_resolve_ww3_path(tmp_path):
+    """Explicit file wins; no source gives None; a bad SAFE name a reason."""
+    safe = tmp_path / SAFE_NAME
+    assert seq.resolve_ww3_path(safe, "/a/ww3.nc", None) == (Path("/a/ww3.nc"), None)
+    assert seq.resolve_ww3_path(safe, None, None) == (None, None)
+    path, reason = seq.resolve_ww3_path(tmp_path / "bad.SAFE", None, str(tmp_path))
+    assert path is None
+    assert reason is not None
+    assert "date" in reason
+
+
+def test_init_worker_sets_synchronous_dask():
+    """Workers run dask single-threaded (one process per core)."""
+    import dask  # noqa: PLC0415
+
+    seq._init_worker(logging.INFO)
+    assert dask.config.get("scheduler") == "synchronous"
+    dask.config.set(scheduler=None)
+
+
+def test_batch_process_safes_process_pool(tmp_path):
+    """With workers > 1 SAFEs run in a process pool; errors are collected."""
+    config = tmp_path / "config.yml"
+    config.write_text(yaml.safe_dump({"product_version": "v0.2"}))
+    # SAFEs without measurement directory -> FileNotFoundError in the workers
+    safes = [tmp_path / SAFE_NAME, tmp_path / SAFE_NAME.replace("711E", "AAAA")]
+    for safe in safes:
+        safe.mkdir()
+    stats = seq.batch_process_safes(
+        safe_dirs=safes,
+        ww3_file=str(tmp_path / "ww3.nc"),
+        ww3_dir=None,
+        config=config,
+        mode="lasso",
+        output_dir=tmp_path / "out",
+        verbose=True,
+        overwrite=False,
+        workers=2,
+    )
+    assert stats["failed_other"] == 2
+    assert all("FileNotFoundError" in r for _, r in stats["failed_safes"])
+    seq.print_summary(stats)
+
+
+def _write_listing(tmp_path: Path, n: int) -> tuple[Path, list[Path]]:
+    """Listing of n existing SAFEs written with an 'old platform' prefix."""
+    root = tmp_path / "legacy"
+    safes = []
+    for i in range(n):
+        safe = root / SAFE_NAME.replace("711E", f"{i:04d}")
+        safe.mkdir(parents=True)
+        safes.append(safe)
+    listing = tmp_path / "listing.txt"
+    listing.write_text("".join(f"/old/cache/{s.relative_to(root)}\n" for s in safes))
+    return listing, safes
+
+
+def test_main_chunk_and_path_replace(tmp_path, monkeypatch):
+    """main() remaps the listing paths and keeps only chunk I of N."""
+    listing, safes = _write_listing(tmp_path, 5)
+    config = tmp_path / "config.yml"
+    config.write_text(yaml.safe_dump({"product_version": "v0.2"}))
+    seen: list[Path] = []
+
+    def fake_process_safe(safe_dir, *_args, **_kwargs):
+        seen.append(safe_dir)
+        return [safe_dir / "x.nc"]
+
+    monkeypatch.setattr(seq, "process_safe", fake_process_safe)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "procl2c-sequential",
+            "--listing-safe",
+            str(listing),
+            "--config",
+            str(config),
+            "--ww3-file",
+            str(tmp_path / "ww3.nc"),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--path-replace",
+            f"/old/cache={tmp_path / 'legacy'}",
+            "--chunk",
+            "1/2",
+            "--workers",
+            "1",
+        ],
+    )
+    seq.main()
+    assert seen == safes[1::2]
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--path-replace", "no-equal-sign"],
+        ["--chunk", "one/two"],
+        ["--ww3-dir", "/somewhere"],  # with --ww3-file: mutually exclusive
+    ],
+)
+def test_main_invalid_arguments(tmp_path, monkeypatch, extra):
+    """Invalid CLI arguments stop with exit code 1."""
+    listing, _ = _write_listing(tmp_path, 1)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "procl2c-sequential",
+            "--listing-safe",
+            str(listing),
+            "--config",
+            "c.yml",
+            "--ww3-file",
+            "ww3.nc",
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--path-replace",
+            f"/old/cache={tmp_path / 'legacy'}",
+            *extra,
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        seq.main()
+    assert exc.value.code == 1
+
+
+def test_main_dry_run(tmp_path, monkeypatch):
+    """--dry-run lists the SAFEs and their WW3 run directory only."""
+    listing, _ = _write_listing(tmp_path, 2)
+    ww3_root = tmp_path / "ww3"
+    _make_run_dir(ww3_root, "2026-03-31T00_2026-04-01T00")
+    monkeypatch.setattr(
+        seq, "process_safe", lambda *_, **__: pytest.fail("must not process")
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "procl2c-sequential",
+            "--listing-safe",
+            str(listing),
+            "--config",
+            "c.yml",
+            "--ww3-dir",
+            str(ww3_root),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--path-replace",
+            f"/old/cache={tmp_path / 'legacy'}",
+            "--dry-run",
+        ],
+    )
+    seq.main()

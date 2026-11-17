@@ -20,6 +20,7 @@ from topsocnww3sp.l2c_processor import (
     create_global_attributes,
     find_ww3_file,
     list_osw_files_in_safe,
+    load_ww3,
     main,
     normalize_corner_arrays,
     process_group,
@@ -1266,3 +1267,156 @@ def test_process_safe_land_subswath_does_not_stop_others(
     assert sorted(p.name.split("-")[1] for p in written) == ["iw2", "iw3"]
     for path in written:
         assert path.name.endswith("_v0.2.nc")
+
+
+_CFG_V02 = {
+    "product_version": "v0.2",
+    "TIME_THRESHOLD_MINUTES": 30,
+    "DISTANCE_THRESHOLD_KM": 20,
+    "BUFFER_DEG": 0.1,
+}
+
+
+@pytest.fixture
+def patched_inputs(monkeypatch, dummy_sar_ds_with_corners, dummy_ww3_ds_sparse):
+    """read_osw / WW3 loading replaced by in-memory dummies."""
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.read_osw",
+        lambda *_, **__: (dummy_sar_ds_with_corners, {}),
+    )
+    monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: dummy_ww3_ds_sparse)
+    return dummy_ww3_ds_sparse
+
+
+def test_process_safe_skip_existing_and_overwrite(
+    mock_safe_directory, patched_inputs, tmp_path, monkeypatch
+):
+    """Existing outputs are skipped (WW3 not even loaded) unless overwrite."""
+    del patched_inputs
+    safe_dir, _ = mock_safe_directory
+    out = tmp_path / "out"
+    first = process_safe(safe_dir, _CFG_V02, out, ww3_path=tmp_path / "ww3.nc")
+    assert len(first) == 3
+
+    def no_ww3(*_args, **_kwargs):
+        pytest.fail("WW3 must not be loaded when every output exists")
+
+    monkeypatch.setattr("topsocnww3sp.l2c_processor.load_ww3", no_ww3)
+    assert process_safe(safe_dir, _CFG_V02, out, ww3_path=tmp_path / "ww3.nc") == []
+    monkeypatch.undo()
+
+
+def test_process_safe_overwrite(mock_safe_directory, patched_inputs, tmp_path):
+    """With overwrite=True existing outputs are replaced."""
+    del patched_inputs
+    safe_dir, _ = mock_safe_directory
+    out = tmp_path / "out"
+    first = process_safe(safe_dir, _CFG_V02, out, ww3_path=tmp_path / "ww3.nc")
+    again = process_safe(
+        safe_dir, _CFG_V02, out, ww3_path=tmp_path / "ww3.nc", overwrite=True
+    )
+    assert again == first
+
+
+def test_process_safe_multi_grid_and_config_search(
+    mock_safe_directory, patched_inputs, tmp_path, monkeypatch
+):
+    """Without ww3_path the WW3 dir comes from the config; a dir is multi-grid."""
+    safe_dir, _ = mock_safe_directory
+    ww3_dir = tmp_path / "ww3_run"
+    ww3_dir.mkdir()
+    calls: list[Path] = []
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.find_ww3_file", lambda *_: str(ww3_dir)
+    )
+
+    def fake_multi_grid(path, *_args):
+        calls.append(path)
+        return patched_inputs
+
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.load_ww3_multi_grid", fake_multi_grid
+    )
+    written = process_safe(safe_dir, _CFG_V02, tmp_path / "out")
+    assert calls == [ww3_dir]
+    assert len(written) == 3
+
+
+def test_load_ww3_field_failure_is_not_fatal(
+    patched_inputs, tmp_path, monkeypatch, caplog
+):
+    """A FIELD loading error only logs a warning: no FIELD variables."""
+    del patched_inputs
+
+    def boom(*_args, **_kwargs):
+        msg = "unreadable FIELD file"
+        raise OSError(msg)
+
+    monkeypatch.setattr("topsocnww3sp.l2c_processor.load_ww3_field", boom)
+    sar_start = datetime(2022, 1, 7, 6, 25, tzinfo=timezone.utc)
+    ds, field_vars = load_ww3(tmp_path / "ww3.nc", sar_start, _CFG_V02)
+    assert field_vars == []
+    assert "efth" in ds
+    assert "unreadable FIELD file" in caplog.text
+
+
+def test_process_safe_1to1_group_names(
+    mock_safe_directory, dummy_sar_ds_with_corners, dummy_ww3_ds, tmp_path, monkeypatch
+):
+    """Non-lasso modes: SAR groups unprefixed, WW3_/MATCH_MAP_ groups kept."""
+    safe_dir, _ = mock_safe_directory
+    monkeypatch.setattr(
+        "topsocnww3sp.l2c_processor.read_osw",
+        lambda *_, **__: (dummy_sar_ds_with_corners, {}),
+    )
+    monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: dummy_ww3_ds)
+    groups: list[str] = []
+
+    def fake_write(_path, _attrs, sar_groups, ww3_groups, match_groups=None):
+        groups.extend(g for g, _ in [*sar_groups, *ww3_groups, *(match_groups or [])])
+
+    monkeypatch.setattr("topsocnww3sp.l2c_processor.write_output_file", fake_write)
+    written = process_safe(
+        safe_dir, _CFG_V02, tmp_path / "out", mode="1to1", ww3_path=tmp_path / "w.nc"
+    )
+    assert len(written) == 3
+    assert set(groups) == {
+        "intraburst",
+        "interburst",
+        "WW3_intraburst",
+        "WW3_interburst",
+        "MATCH_MAP_intraburst",
+        "MATCH_MAP_interburst",
+    }
+
+
+def test_main_exits_1_on_missing_safe(tmp_path, monkeypatch):
+    """The procl2c CLI exits with code 1 when the SAFE cannot be processed."""
+    config_file = tmp_path / "config.yml"
+    config_file.write_text(yaml.safe_dump(_CFG_V02))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "procl2c",
+            "--ocn-safe",
+            str(tmp_path / "missing.SAFE"),
+            "--config",
+            str(config_file),
+            "--ww3-file",
+            "ww3.nc",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+
+
+def test_tidy_ww3_track_dataset_decoded_names():
+    """track_name already decoded by xarray (1-D bytes) is handled too."""
+    ds = _ww3_points([0.0, 1.0], [0.0, 1.0])
+    ds["track_name"] = (["time"], np.array([b"", b"  "], dtype="S32"))
+    assert "track_name" not in tidy_ww3_track_dataset(ds).variables
+    ds["track_name"] = (["time"], np.array([b"t1", b""], dtype="S32"))
+    assert list(tidy_ww3_track_dataset(ds)["track_name"].to_numpy()) == ["t1", ""]
