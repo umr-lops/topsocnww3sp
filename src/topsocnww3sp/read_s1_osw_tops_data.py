@@ -8,9 +8,6 @@ import numpy as np
 import xarray as xr
 from tqdm import tqdm
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
 logger = logging.getLogger(__name__)
 
 
@@ -31,9 +28,17 @@ def clean_source_path(full_path: str) -> str:
 
 def read_osw(
     group: str, lst_sar_files_osw: list[Path], dev: bool = False
-) -> tuple[xr.Dataset, dict[str, np.ndarray]]:
-    """
-    Read OSW files and concatenate along tiles dimension.
+) -> tuple[xr.Dataset | None, dict[str, np.ndarray]]:
+    """Read OSW files and concatenate along tiles dimension.
+
+    Args:
+        group: OSW group to read ("intraburst" or "interburst")
+        lst_sar_files_osw: OSW .nc files (one per subswath)
+        dev: only read the first 2 files
+
+    Returns:
+        (concatenated dataset, or None when every file is land-only;
+        dict of the tile centre longitudes/latitudes of all files)
     """
     cpt_subswath_concat = 0
     cpt_subswath_discard = 0
@@ -49,8 +54,7 @@ def read_osw(
         lst_sar_files_osw = lst_sar_files_osw[:2]
         logger.info("Running in development mode, only processing the first 2 files")
 
-    for ii in tqdm(range(len(lst_sar_files_osw))):
-        onesarfileocn = lst_sar_files_osw[ii]
+    for onesarfileocn in tqdm(lst_sar_files_osw, disable=len(lst_sar_files_osw) < 2):
         dsosw = xr.open_dataset(onesarfileocn, group=group)
 
         # Preserve original attributes from the source file
@@ -80,7 +84,9 @@ def read_osw(
     )
     logger.debug("min_kybinsize %d", min_kybinsize)
 
-    # List comprehension for performance
+    if not concatosw:
+        return None, coords_osw
+
     concatosw2 = [
         oo.isel({"oswKyBinSize": slice(0, min_kybinsize)}) for oo in concatosw
     ]

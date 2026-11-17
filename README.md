@@ -170,8 +170,9 @@ output/
 
 Each output NetCDF file contains:
 
-- `SAR_intraburst` group: Original SAR OSW data
-- `SAR_interburst` group: Interburst SAR data
+- `intraburst` group: Original SAR OSW intraburst data (same group name as in
+  the ESA OSW file)
+- `interburst` group: Original SAR OSW interburst data
 - `WW3` group: Filtered WW3 spectra (lasso mode), including the WW3 integrated
   parameters (e.g. `hs`) sampled from the FIELD files on the same `sample`
   dimension as the spectra

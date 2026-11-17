@@ -33,7 +33,8 @@ from shapely.geometry import MultiPoint, Point
 logger = logging.getLogger(__name__)
 
 WW3_GROUP_CANDIDATES = ("WW3", "WW3_intraburst", "WW3_interburst")
-SAR_GROUP = "SAR_intraburst"
+# "intraburst" since v0.2 (issue #21), "SAR_intraburst" in v0.1 products
+SAR_GROUP_CANDIDATES = ("intraburst", "SAR_intraburst")
 CORNER_VARS = ("oswLongitudeCorner", "oswLatitudeCorner")
 # One outline colour per subswath footprint (dashed)
 SUBSWATH_COLORS = [
@@ -134,9 +135,14 @@ def sar_footprint(l2c_file: Path) -> MultiPoint:
     Returns:
         A MultiPoint of all tile corner coordinates (may be empty).
     """
-    try:
-        sar = xr.open_dataset(l2c_file, group=SAR_GROUP)
-    except (KeyError, OSError):
+    sar = None
+    for group in SAR_GROUP_CANDIDATES:
+        try:
+            sar = xr.open_dataset(l2c_file, group=group)
+            break
+        except (KeyError, OSError):
+            continue
+    if sar is None:
         return MultiPoint()
     try:
         lon = sar[CORNER_VARS[0]].to_numpy().ravel()

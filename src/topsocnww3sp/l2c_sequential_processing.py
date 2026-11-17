@@ -3,23 +3,38 @@
 
 import argparse
 import logging
+import multiprocessing
+import os
+import re
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from topsocnww3sp.l2c_processor import main as l2c_main
+import dask
+import yaml
+
+from topsocnww3sp.l2c_processor import process_safe
+
+# WW3 run directory name, e.g. "2026-03-31T00_2026-04-01T00"
+_WW3_RUN_DIR_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2})_(\d{4}-\d{2}-\d{2}T\d{2})$")
 
 logger = logging.getLogger(__name__)
 
 
-def parse_listing_file(listing_path: Path) -> list[Path]:
+def parse_listing_file(
+    listing_path: Path, path_replace: list[tuple[str, str]] | None = None
+) -> list[Path]:
     """Parse a listing file containing SAFE directory paths.
 
     Args:
         listing_path: Path to the listing file (one SAFE path per line,
                       lines starting with # are ignored)
+        path_replace: Optional (old, new) prefix substitutions applied to each
+            path, e.g. to remap a listing made on another platform
 
     Returns:
         List of valid SAFE directory paths
@@ -37,6 +52,9 @@ def parse_listing_file(listing_path: Path) -> list[Path]:
             line = raw_line.strip()
             if not line or line.startswith("#"):
                 continue
+            for old, new in path_replace or []:
+                if line.startswith(old):
+                    line = new + line[len(old) :]
             safe_path = Path(line)
             if safe_path.exists() and safe_path.is_dir():
                 safe_dirs.append(safe_path)
@@ -76,98 +94,66 @@ def find_matching_ww3_dirs(
     ww3_root: Path,
     sar_date: datetime,
 ) -> list[Path]:
-    """Find WW3 subdirectories matching the SAR acquisition date.
+    """Find WW3 run directories matching the SAR acquisition date.
 
     The WW3 directory structure is expected to be:
-    {ww3_root}/{date_range}/{subgrid}/{date_range}/TRACK_NC/
-    or {ww3_root}/{date_range}/TRACK_NC/
+    {ww3_root}/{start}_{stop}/{subgrid}/{start}_{stop}/TRACK_NC/
+    with {start}_{stop} like ``2026-03-31T00_2026-04-01T00``. The run
+    directories whose [start, stop) range contains the SAR time are returned
+    first; a name-based search on the date is used as a fallback.
 
     Args:
-        ww3_root: Root directory containing WW3 subgrid directories
+        ww3_root: Root directory containing WW3 run directories
         sar_date: SAR acquisition date
 
     Returns:
-        List of paths to date_range directories (parent of subgrid)
+        List of paths to run directories (parent of subgrid), best match first
     """
-    date_str = sar_date.strftime("%Y-%m-%d")
-    year = sar_date.strftime("%Y")
-
-    patterns = [
-        f"*{date_str}T*",
-        f"*{year}-*",
-        f"*{year}*",
-    ]
-
-    date_dirs: list[Path] = []
-    for pattern in patterns:
-        # PERF401: use extend with generator
-        date_dirs.extend(d for d in ww3_root.glob(pattern) if d.is_dir())
-
-    # Also search recursively for date directories
-    for path in ww3_root.rglob(f"*{date_str}T*"):
-        if path.is_dir() and path not in date_dirs:
-            date_dirs.append(path)
-
-    # Filter and validate
-    valid_dirs: list[Path] = []
-    for date_dir in set(date_dirs):
-        has_data = False
-
-        # Look for TRACK_NC directories
-        for track_dir in date_dir.rglob("TRACK_NC"):
-            if track_dir.is_dir() and list(track_dir.glob("*.nc")):
-                has_data = True
-                break
-
-        if not has_data:
-            for subdir in date_dir.iterdir():
-                if subdir.is_dir():
-                    track_dir = subdir / "TRACK_NC"
-                    if track_dir.exists() and list(track_dir.glob("*.nc")):
-                        has_data = True
-                        break
-
-        if has_data:
-            valid_dirs.append(date_dir)
-            logger.debug("Found valid WW3 directory: %s", date_dir)
-        else:
-            logger.debug("No WW3 data in: %s", date_dir)
-
-    return sorted(set(valid_dirs))
+    return list(_find_matching_ww3_dirs_cached(ww3_root, sar_date))
 
 
-def create_processor_args(
-    safe_dir: Path,
-    ww3_path: str | Path | None,
-    config: Path,
-    mode: str,
-    output_dir: Path,
-    verbose: bool,
-    overwrite: bool,
-) -> argparse.Namespace:
-    """Create arguments Namespace for l2c_processor.main().
-
-    Args:
-        safe_dir: SAFE directory to process
-        ww3_path: WW3 file or directory path
-        config: Path to config YAML
-        mode: Processing mode (1to1, unique, many, lasso)
-        output_dir: Base output directory
-        verbose: Enable verbose logging
-        overwrite: Overwrite existing files
-
-    Returns:
-        Namespace object with arguments
-    """
-    return argparse.Namespace(
-        ocn_safe=str(safe_dir),
-        ww3_file=str(ww3_path) if ww3_path else None,
-        config=str(config),
-        mode=mode,
-        verbose=verbose,
-        output_dir=str(output_dir),
-        overwrite=overwrite,
+@lru_cache(maxsize=256)
+def _find_matching_ww3_dirs_cached(
+    ww3_root: Path, sar_date: datetime
+) -> tuple[Path, ...]:
+    """Cached implementation of find_matching_ww3_dirs (one scan per date)."""
+    sar_utc = (
+        sar_date.astimezone(timezone.utc)
+        if sar_date.tzinfo
+        else sar_date.replace(tzinfo=timezone.utc)
     )
+
+    # 1. Run directories whose time range contains the SAR time
+    in_range: list[Path] = []
+    for run_dir in sorted(ww3_root.iterdir()):
+        match = _WW3_RUN_DIR_RE.match(run_dir.name)
+        if not match or not run_dir.is_dir():
+            continue
+        start, stop = (
+            datetime.strptime(g, "%Y-%m-%dT%H").replace(tzinfo=timezone.utc)
+            for g in match.groups()
+        )
+        if start <= sar_utc < stop and _has_track_data(run_dir):
+            in_range.append(run_dir)
+    if in_range:
+        return tuple(in_range)
+
+    # 2. Fallback: directories named after the SAR date
+    date_str = sar_date.strftime("%Y-%m-%d")
+    candidates = {d for d in ww3_root.glob(f"*{date_str}T*") if d.is_dir()}
+    valid = sorted(d for d in candidates if _has_track_data(d))
+    for d in valid:
+        logger.debug("Found valid WW3 directory: %s", d)
+    return tuple(valid)
+
+
+def _has_track_data(run_dir: Path) -> bool:
+    """True if a TRACK_NC directory with .nc files exists below run_dir."""
+    for track_dir in run_dir.glob("*/*/TRACK_NC"):
+        if any(track_dir.glob("*.nc")):
+            return True
+    track_dir = run_dir / "TRACK_NC"
+    return track_dir.is_dir() and any(track_dir.glob("*.nc"))
 
 
 def dry_run_summary(
@@ -233,6 +219,66 @@ def dry_run_summary(
     )
 
 
+def resolve_ww3_path(
+    safe_dir: Path, ww3_file: str | None, ww3_dir: str | None
+) -> tuple[Path | None, str | None]:
+    """WW3 file/dir to use for a SAFE.
+
+    Returns:
+        (WW3 path, None) or (None, failure reason)
+    """
+    if ww3_file:
+        return Path(ww3_file), None
+    if not ww3_dir:
+        return None, None
+    sar_date = extract_sar_date(safe_dir)
+    if sar_date is None:
+        return None, "Could not extract date from SAFE name"
+    matching_dirs = find_matching_ww3_dirs(Path(ww3_dir), sar_date)
+    if not matching_dirs:
+        return None, f"No WW3 directory for date {sar_date}"
+    return matching_dirs[0], None
+
+
+def _process_one_safe(
+    safe_dir: Path,
+    ww3_path: Path | None,
+    config: dict[str, Any],
+    mode: str,
+    output_dir: Path,
+    overwrite: bool,
+) -> tuple[str, str, int]:
+    """Process one SAFE, never raising.
+
+    Returns:
+        (SAFE path, status, number of files written); status is "ok",
+        "no_colocation" or "error: <message>"
+    """
+    try:
+        written = process_safe(
+            safe_dir,
+            config,
+            output_dir,
+            mode=mode,
+            ww3_path=ww3_path,
+            overwrite=overwrite,
+        )
+    # a failing SAFE must not stop the batch
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.exception("Unexpected error processing %s", safe_dir.name)
+        return str(safe_dir), f"error: {type(exc).__name__}: {exc}"[:300], 0
+    return str(safe_dir), "ok" if written else "no_colocation", len(written)
+
+
+def _init_worker(log_level: int) -> None:
+    """Configure logging and single-threaded numerics in a worker process."""
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(processName)s - %(levelname)s - %(message)s",
+    )
+    dask.config.set(scheduler="synchronous")
+
+
 def batch_process_safes(
     safe_dirs: list[Path],
     ww3_file: str | None,
@@ -242,130 +288,90 @@ def batch_process_safes(
     output_dir: Path,
     verbose: bool,
     overwrite: bool,
+    workers: int = 1,
 ) -> dict[str, Any]:
-    """Process multiple SAFE directories and collect statistics."""
+    """Process multiple SAFE directories and collect statistics.
+
+    Args:
+        safe_dirs: SAFE directories to process
+        ww3_file: WW3 file or run directory used for every SAFE
+        ww3_dir: WW3 root directory, the run directory is found per SAFE date
+        config: Path to the YAML config
+        mode: Matching mode
+        output_dir: Base output directory
+        verbose: Debug logging
+        overwrite: Overwrite existing outputs
+        workers: Number of SAFEs processed in parallel (processes)
+
+    Returns:
+        Statistics dictionary
+    """
+    with config.open(encoding="utf-8") as f:
+        config_dict = yaml.safe_load(f)
+
     stats: dict[str, Any] = {
         "total_safes": len(safe_dirs),
         "processed_successfully": 0,
-        "failed_temporal_match": 0,
-        "failed_spatial_match": 0,
+        "no_colocation": 0,
         "failed_no_ww3_dir": 0,
-        "failed_no_ocean_tiles": 0,
         "failed_other": 0,
+        "files_written": 0,
         "successful_safes": [],
         "failed_safes": [],
     }
 
-    for i, safe_dir in enumerate(safe_dirs, 1):
-        logger.info("=" * 70)
-        logger.info("Processing SAFE %d/%d: %s", i, len(safe_dirs), safe_dir.name)
-        logger.info("=" * 70)
+    jobs: list[tuple[Path, Path | None]] = []
+    for safe_dir in safe_dirs:
+        ww3_path, reason = resolve_ww3_path(safe_dir, ww3_file, ww3_dir)
+        if reason is not None:
+            logger.warning("%s: %s", safe_dir.name, reason)
+            stats["failed_no_ww3_dir"] += 1
+            stats["failed_safes"].append((str(safe_dir), reason))
+            continue
+        jobs.append((safe_dir, ww3_path))
 
-        current_ww3_path: str | Path | None = None
-        if ww3_file:
-            current_ww3_path = ww3_file
-        elif ww3_dir:
-            sar_date = extract_sar_date(safe_dir)
-            if sar_date is None:
-                logger.warning(
-                    "Could not extract date from SAFE name: %s", safe_dir.name
-                )
-                stats["failed_no_ww3_dir"] += 1
-                stats["failed_safes"].append(
-                    (str(safe_dir), "Could not extract date from SAFE name")
-                )
-                continue
-
-            matching_dirs = find_matching_ww3_dirs(Path(ww3_dir), sar_date)
-            if not matching_dirs:
-                logger.warning("No matching WW3 directory found for %s", safe_dir.name)
-                stats["failed_no_ww3_dir"] += 1
-                stats["failed_safes"].append(
-                    (str(safe_dir), f"No WW3 directory for date {sar_date}")
-                )
-                continue
-
-            current_ww3_path = matching_dirs[0]
-            logger.info("Using WW3 directory: %s", current_ww3_path)
-
-        original_argv = sys.argv.copy()
-
-        try:
-            args = create_processor_args(
-                safe_dir=safe_dir,
-                ww3_path=current_ww3_path,
-                config=config,
-                mode=mode,
-                output_dir=output_dir,
-                verbose=verbose,
-                overwrite=overwrite,
-            )
-
-            # Build command line arguments
-            sys.argv = ["l2c_processor.py"]
-            for key, value in vars(args).items():
-                if value is None:
-                    continue
-                if key == "ww3_file" and value is not None:
-                    sys.argv.append("--ww3-file")
-                    sys.argv.append(str(value))
-                elif key == "overwrite" and value:
-                    sys.argv.append("--overwrite")
-                elif key == "verbose" and value:
-                    sys.argv.append("--verbose")
-                elif key == "ocn_safe":
-                    sys.argv.append("--ocn-safe")
-                    sys.argv.append(str(value))
-                elif key == "config":
-                    sys.argv.append("--config")
-                    sys.argv.append(str(value))
-                elif key == "mode":
-                    sys.argv.append("--mode")
-                    sys.argv.append(value)
-                elif key == "output_dir":
-                    sys.argv.append("--output-dir")
-                    sys.argv.append(str(value))
-
-            l2c_main()
-
+    def record(result: tuple[str, str, int], index: int) -> None:
+        safe, status, n_written = result
+        logger.info(
+            "[%d/%d] %s: %s (%d files)",
+            index,
+            len(jobs),
+            Path(safe).name,
+            status,
+            n_written,
+        )
+        stats["files_written"] += n_written
+        if status == "ok":
             stats["processed_successfully"] += 1
-            stats["successful_safes"].append(str(safe_dir))
+            stats["successful_safes"].append(safe)
+        elif status == "no_colocation":
+            stats["no_colocation"] += 1
+        else:
+            stats["failed_other"] += 1
+            stats["failed_safes"].append((safe, status))
 
-        except SystemExit as e:
-            if e.code == 0:
-                stats["processed_successfully"] += 1
-                stats["successful_safes"].append(str(safe_dir))
-            else:
-                stats["failed_other"] += 1
-                stats["failed_safes"].append((str(safe_dir), f"exit code {e.code}"))
-                logger.exception(
-                    "Failed to process %s (exit code %s)", safe_dir.name, e.code
-                )
-        except (OSError, ValueError, TypeError) as e:
-            error_msg = str(e)
-            if "No WW3 data within time window" in error_msg:
-                stats["failed_temporal_match"] += 1
-                logger.warning("No temporal match for %s", safe_dir.name)
-            elif "No WW3 points inside the buffered subswath footprint" in error_msg:
-                stats["failed_spatial_match"] += 1
-                logger.warning("No spatial match for %s", safe_dir.name)
-            elif "must supply at least one object to concatenate" in error_msg:
-                stats["failed_no_ocean_tiles"] += 1
-                logger.warning(
-                    "No ocean tiles found (all tiles on land) for %s",
-                    safe_dir.name,
-                )
-                stats["failed_safes"].append(
-                    (str(safe_dir), "No ocean tiles (all tiles on land)")
-                )
-            else:
-                stats["failed_other"] += 1
-                logger.exception("Unexpected error processing %s", safe_dir.name)
-                stats["failed_safes"].append((str(safe_dir), error_msg[:200]))
+    args = (config_dict, mode, output_dir, overwrite)
+    if workers <= 1:
+        for i, (safe_dir, ww3_path) in enumerate(jobs, 1):
+            logger.info("=" * 70)
+            logger.info("Processing SAFE %d/%d: %s", i, len(jobs), safe_dir.name)
+            record(_process_one_safe(safe_dir, ww3_path, *args), i)
+        return stats
 
-        finally:
-            sys.argv = original_argv
-
+    log_level = logging.DEBUG if verbose else logging.INFO
+    ctx = multiprocessing.get_context("forkserver")
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=ctx,
+        initializer=_init_worker,
+        initargs=(log_level,),
+    ) as pool:
+        futures = [
+            pool.submit(_process_one_safe, safe_dir, ww3_path, *args)
+            for safe_dir, ww3_path in jobs
+        ]
+        for i, fut in enumerate(as_completed(futures), 1):
+            record(fut.result(), i)
     return stats
 
 
@@ -377,13 +383,12 @@ def print_summary(stats: dict[str, Any]) -> None:
     logger.info("=" * 70)
     logger.info("Total SAFE directories processed: %d", stats["total_safes"])
     logger.info("Successfully processed: %d", stats["processed_successfully"])
-    logger.info("Failed - temporal match: %d", stats["failed_temporal_match"])
-    logger.info("Failed - spatial match: %d", stats["failed_spatial_match"])
-    logger.info("Failed - no WW3 directory found: %d", stats["failed_no_ww3_dir"])
+    logger.info("L2C files written: %d", stats["files_written"])
     logger.info(
-        "Failed - no ocean tiles (all on land): %d",
-        stats["failed_no_ocean_tiles"],
+        "No co-location (land only, no WW3 match, or outputs already present): %d",
+        stats["no_colocation"],
     )
+    logger.info("Failed - no WW3 directory found: %d", stats["failed_no_ww3_dir"])
     logger.info("Failed - other errors: %d", stats["failed_other"])
     logger.info("-" * 70)
 
@@ -462,6 +467,27 @@ Examples:
         help="Overwrite existing output files",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=int(os.environ.get("SLURM_CPUS_PER_TASK", "1")),
+        help="Number of SAFEs processed in parallel "
+        "(default: $SLURM_CPUS_PER_TASK, else 1)",
+    )
+    parser.add_argument(
+        "--chunk",
+        default=None,
+        help="Process only chunk I of N of the listing, as 'I/N' (0-based I), "
+        "e.g. '$SLURM_ARRAY_TASK_ID/$SLURM_ARRAY_TASK_COUNT' in a Slurm job array",
+    )
+    parser.add_argument(
+        "--path-replace",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="Replace the OLD prefix of the SAFE paths of the listing by NEW "
+        "(repeatable), e.g. /home/datawork-cersat-public/cache=/legacy/project/cersat/public/cache",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only list what would be processed without actually running the processor",
@@ -488,8 +514,24 @@ Examples:
     config_path = Path(args.config)
     output_dir = Path(args.output_dir)
 
+    path_replace: list[tuple[str, str]] = []
+    for item in args.path_replace:
+        old, sep, new = item.partition("=")
+        if not sep or not old:
+            logger.error("Invalid --path-replace %r, expected OLD=NEW", item)
+            sys.exit(1)
+        path_replace.append((old, new))
+
     logger.info("Reading listing file: %s", listing_path)
-    safe_dirs = parse_listing_file(listing_path)
+    safe_dirs = parse_listing_file(listing_path, path_replace)
+    if args.chunk:
+        try:
+            i_chunk, n_chunk = (int(v) for v in args.chunk.split("/"))
+        except ValueError:
+            logger.exception("Invalid --chunk %r, expected I/N", args.chunk)
+            sys.exit(1)
+        safe_dirs = safe_dirs[i_chunk::n_chunk]
+        logger.info("Chunk %d/%d: %d SAFEs", i_chunk, n_chunk, len(safe_dirs))
 
     if not safe_dirs:
         logger.error("No valid SAFE directories found in listing file")
@@ -511,6 +553,7 @@ Examples:
         output_dir=output_dir,
         verbose=args.verbose,
         overwrite=args.overwrite,
+        workers=args.workers,
     )
     elapsed_time = time.time() - start_time
 

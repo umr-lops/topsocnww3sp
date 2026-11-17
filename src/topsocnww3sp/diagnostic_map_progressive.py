@@ -291,6 +291,9 @@ def main() -> None:
 
     logger.info("Loading OSW data...")
     sar_intra_ds, _ = read_osw("intraburst", osw_paths, dev=False)
+    if sar_intra_ds is None:
+        logger.error("No ocean tile in the OSW files (all land): nothing to map")
+        return
     sar_inter_ds = None
     if args.group in ("interburst", "both"):
         sar_inter_ds, _ = read_osw("interburst", osw_paths, dev=False)

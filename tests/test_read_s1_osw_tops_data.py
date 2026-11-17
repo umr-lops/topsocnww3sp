@@ -5,7 +5,6 @@ from pathlib import Path
 from warnings import catch_warnings, simplefilter
 
 import numpy as np
-import pytest
 import xarray as xr
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
@@ -56,6 +55,7 @@ def test_read_osw_single_file_no_subswath_dim(tmp_path):
 
     fat_osw, coords_osw = read_osw("intraburst", [osw_path])
 
+    assert fat_osw is not None
     assert "subswath" not in fat_osw.dims
     assert "subswath" not in fat_osw.coords
     assert fat_osw.sizes["tiles"] == 6
@@ -64,11 +64,12 @@ def test_read_osw_single_file_no_subswath_dim(tmp_path):
 
 
 def test_read_osw_all_land_returns_empty(tmp_path):
-    """When every file is land-only, read_osw raises on the empty concat."""
+    """When every file is land-only, read_osw returns None (no exception)."""
     osw_path = (
         tmp_path / "measurement" / "s1a-iw2-osw-vv-20220107t062430-041351-04ea80-002.nc"
     )
     _write_osw_file(osw_path, land_flag=1)
 
-    with pytest.raises(ValueError, match="at least one object"):
-        read_osw("intraburst", [osw_path])
+    fat_osw, coords_osw = read_osw("intraburst", [osw_path])
+    assert fat_osw is None
+    assert len(coords_osw["lon_osw"]) > 0
