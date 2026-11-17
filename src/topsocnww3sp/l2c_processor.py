@@ -18,6 +18,7 @@ from shapely.geometry import MultiPoint
 
 from topsocnww3sp.read_s1_osw_tops_data import read_osw
 from topsocnww3sp.utils import (
+    SPECTRAL_PERIOD_MIN_HS,
     gnomonic_projection,
     haversine,
     load_ww3_field,
@@ -624,7 +625,12 @@ def load_ww3(
     ds_ww3 = tidy_ww3_track_dataset(ds_ww3)
 
     # Integrated parameters computed from each spectrum (DLR-3, issue #20)
-    spectral_vars = spectral_integrated_parameters(ds_ww3)
+    spectral_vars = spectral_integrated_parameters(
+        ds_ww3,
+        min_hs_for_periods=float(
+            config.get("spectral_period_min_hs", SPECTRAL_PERIOD_MIN_HS)
+        ),
+    )
     if spectral_vars:
         ds_ww3 = ds_ww3.assign(spectral_vars)
 

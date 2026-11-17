@@ -1468,6 +1468,19 @@ def test_spectral_integrated_parameters(with_bounds):
     assert "standard_name" in out["tm0m1_spec"].attrs
 
 
+def test_spectral_periods_masked_for_near_empty_spectra():
+    """Under sea ice (hs_spec ~0) the periods are NaN, hs_spec is kept."""
+    ds = _single_bin_spectrum(energy=1e-40)
+    out = spectral_integrated_parameters(ds)
+    assert 0 < float(out["hs_spec"][0]) < 0.01
+    assert np.isnan(out["tm02_spec"][0])
+    assert np.isnan(out["tm0m1_spec"][0])
+    assert "hs_spec < 0.01 m" in out["tm02_spec"].attrs["comment"]
+    # the threshold is configurable: 0 keeps the periods of any non-empty spectrum
+    out = spectral_integrated_parameters(ds, min_hs_for_periods=0.0)
+    np.testing.assert_allclose(out["tm02_spec"][0], 10.0, rtol=1e-5)
+
+
 def test_spectral_integrated_parameters_without_efth():
     """No spectrum variable: nothing computed."""
     assert spectral_integrated_parameters(xr.Dataset()) == {}
@@ -1484,3 +1497,10 @@ def test_load_ww3_adds_spectral_parameters(tmp_path, monkeypatch):
     )
     assert field_vars == []
     assert {"hs_spec", "tm02_spec", "tm0m1_spec"} <= set(out.data_vars)
+    # spectral_period_min_hs from the config: hs_spec (~3.5 m) below 10 m
+    out, _ = load_ww3(
+        tmp_path / "ww3.nc",
+        datetime(2022, 1, 7, tzinfo=timezone.utc),
+        {**_CFG_V02, "spectral_period_min_hs": 10.0},
+    )
+    assert np.isnan(out["tm02_spec"].to_numpy()).all()

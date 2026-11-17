@@ -75,7 +75,11 @@ each spectrum,
 
 with :math:`\Delta f` = ``frequency2 - frequency1`` and
 :math:`\Delta\theta = 2\pi / N_{directions}`. They answer the DLR request
-for Tm02 and Tm0,-1, which the IRI FIELD files do not provide. Partitioned
+for Tm02 and Tm0,-1, which the IRI FIELD files do not provide. Under sea ice
+the WW3 spectra are numerically empty (``hs_spec`` ~1e-21 m) and the moment
+ratios give meaningless periods, so ``tm02_spec`` and ``tm0m1_spec`` are set
+to NaN where ``hs_spec`` is below ``spectral_period_min_hs`` (configuration
+key, default 0.01 m); ``hs_spec`` itself is kept. Partitioned
 parameters (wind sea / swells) are not provided: they would require a
 partitioning of the spectra.
 
