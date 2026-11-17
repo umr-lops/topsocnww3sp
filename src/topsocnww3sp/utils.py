@@ -152,6 +152,88 @@ def tidy_ww3_track_dataset(ds: xr.Dataset) -> xr.Dataset:
     return ds
 
 
+# Parameters integrated from each WW3 spectrum: name -> CF attributes
+SPECTRAL_PARAMETERS: dict[str, dict[str, str]] = {
+    "hs_spec": {
+        "long_name": "significant wave height integrated from the WW3 spectrum "
+        "efth: 4 * sqrt(m0)",
+        "standard_name": "sea_surface_wave_significant_height",
+        "units": "m",
+    },
+    "tm02_spec": {
+        "long_name": "mean wave period Tm02 integrated from the WW3 spectrum "
+        "efth: sqrt(m0 / m2)",
+        "standard_name": "sea_surface_wave_mean_period_from_variance_spectral_"
+        "density_second_frequency_moment",
+        "units": "s",
+    },
+    "tm0m1_spec": {
+        "long_name": "mean wave period Tm0,-1 (energy period) integrated from "
+        "the WW3 spectrum efth: m-1 / m0",
+        "standard_name": "sea_surface_wave_mean_period_from_variance_spectral_"
+        "density_inverse_frequency_moment",
+        "units": "s",
+    },
+}
+
+
+def spectral_integrated_parameters(ds: xr.Dataset) -> dict[str, xr.DataArray]:
+    """Integrated wave parameters of each WW3 directional spectrum.
+
+    With the frequency moments ``mn = sum_f sum_theta f**n E(f, theta)
+    df dtheta`` of ``efth`` (m2 s rad-1), returns ``hs_spec = 4 sqrt(m0)``,
+    ``tm02_spec = sqrt(m0 / m2)`` and ``tm0m1_spec = m-1 / m0`` (DLR-3, issue
+    #20: the IRI WW3 FIELD files only provide ``hs``). The frequency bin
+    widths are ``frequency2 - frequency1`` when available, otherwise derived
+    from the centre frequencies.
+
+    Args:
+        ds: WW3 track dataset with ``efth(<track dim>, frequency, direction)``,
+            ``frequency`` and ``direction``
+
+    Returns:
+        Mapping of parameter name to a DataArray on the track dimension
+        (empty if ``efth`` is missing); NaN where the spectrum is empty
+    """
+    if "efth" not in ds.variables:
+        return {}
+    efth = ds["efth"]
+    track_dim = efth.dims[0]
+    freq = ds["frequency"].astype("f8")
+    if "frequency1" in ds.variables and "frequency2" in ds.variables:
+        dfreq = (ds["frequency2"] - ds["frequency1"]).astype("f8")
+    else:
+        # bin edges half way between centre frequencies
+        fc = freq.to_numpy()
+        edges = np.concatenate(
+            (
+                [fc[0] - (fc[1] - fc[0]) / 2],
+                (fc[1:] + fc[:-1]) / 2,
+                [fc[-1] + (fc[-1] - fc[-2]) / 2],
+            )
+        )
+        dfreq = xr.DataArray(np.diff(edges), dims="frequency")
+    n_dir = ds.sizes["direction"]
+    dtheta = 2.0 * np.pi / n_dir
+    # spectrum integrated over directions, times the bin width: m2 per bin
+    e_f = efth.astype("f8").fillna(0.0).sum("direction") * dtheta * dfreq
+    m_minus1 = (e_f / freq).sum("frequency")
+    m0 = e_f.sum("frequency")
+    m2 = (e_f * freq**2).sum("frequency")
+    valid = m0 > 0
+    values = {
+        "hs_spec": 4.0 * np.sqrt(m0),
+        "tm02_spec": np.sqrt(m0 / m2),
+        "tm0m1_spec": m_minus1 / m0,
+    }
+    out: dict[str, xr.DataArray] = {}
+    for name, val in values.items():
+        da = val.where(valid).astype("f4").transpose(track_dim)
+        da.attrs = dict(SPECTRAL_PARAMETERS[name])
+        out[name] = da
+    return out
+
+
 def format_logs(logger_obj: logging.Logger, level: str) -> logging.Logger:
     """
     Configure the logger with a specific format and level.

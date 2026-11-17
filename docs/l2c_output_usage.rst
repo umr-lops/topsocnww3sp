@@ -25,4 +25,40 @@ The primary use of the L2C product is to compare observed ocean wave characteris
 
 In ``lasso`` mode, you can iterate through all extracted spectra for a given subswath and perform spatial analysis or compute statistics within the footprint.
 
+In ``lasso`` mode the WW3 spectra and their integrated parameters
+(``hs_spec``, ``tm02_spec``, ``tm0m1_spec``, ``hs``, ``ice``: see
+:ref:`l2c_definition`) are not attached to a SAR tile: they share the
+``sample`` dimension and carry their own ``longitude`` / ``latitude`` /
+``time``. You choose how to associate them with the SAR tiles, for example the
+spectra within a given distance of each tile:
+
+.. code-block:: python
+
+    import numpy as np
+    import xarray as xr
+
+    product = "path/to/product_v0.2.nc"
+    sar = xr.open_dataset(product, group="intraburst")
+    ww3 = xr.open_dataset(product, group="WW3")
+
+    ocean = np.isfinite(sar["oswLon"].values)
+    lon_t = np.radians(sar["oswLon"].values[ocean])
+    lat_t = np.radians(sar["oswLat"].values[ocean])
+    lon_w = np.radians(ww3["longitude"].values)
+    lat_w = np.radians(ww3["latitude"].values)
+
+    # great-circle distance (km) between every tile and every spectrum
+    dist = 6371.0 * np.arccos(
+        np.clip(
+            np.sin(lat_t)[:, None] * np.sin(lat_w)
+            + np.cos(lat_t)[:, None] * np.cos(lat_w) * np.cos(lon_t[:, None] - lon_w),
+            -1,
+            1,
+        )
+    )
+    near = dist < 15.0  # (tiles, samples)
+    with np.errstate(invalid="ignore"):
+        hs_per_tile = np.where(near, ww3["hs_spec"].values, np.nan)
+        hs_mean = np.nanmean(hs_per_tile, axis=1)  # mean WW3 Hs around each tile
+
 In mapping modes (1to1, unique, many), you can use the indices provided in the ``MATCH_MAP`` groups to align each SAR tile with its closest model spectrum accurately.

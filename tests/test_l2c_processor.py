@@ -33,6 +33,7 @@ from topsocnww3sp.l2c_processor import (
 from topsocnww3sp.utils import (
     load_ww3_field,
     load_ww3_multi_grid,
+    spectral_integrated_parameters,
     tidy_ww3_track_dataset,
 )
 
@@ -1420,3 +1421,66 @@ def test_tidy_ww3_track_dataset_decoded_names():
     assert "track_name" not in tidy_ww3_track_dataset(ds).variables
     ds["track_name"] = (["time"], np.array([b"t1", b""], dtype="S32"))
     assert list(tidy_ww3_track_dataset(ds)["track_name"].to_numpy()) == ["t1", ""]
+
+
+# --- Integrated parameters from the WW3 spectra (DLR-3, issue #20) ---
+
+
+def _single_bin_spectrum(
+    f0: float = 0.1, energy: float = 2.0, with_bounds: bool = True
+) -> xr.Dataset:
+    """Track dataset whose spectra hold energy in one frequency bin only."""
+    freqs = np.array([0.05, 0.1, 0.2])
+    n_dir = 24
+    efth = np.zeros((2, 3, n_dir), dtype="f4")
+    efth[0, list(freqs).index(f0), :] = energy  # first spectrum
+    ds = xr.Dataset(
+        {"efth": (["time", "frequency", "direction"], efth)},
+        coords={
+            "time": pd.date_range("2022-01-07", periods=2, freq="h"),
+            "frequency": freqs,
+            "direction": np.linspace(0, 345, n_dir),
+        },
+    )
+    if with_bounds:
+        width = np.array([0.04, 0.06, 0.1])
+        ds["frequency1"] = (["time", "frequency"], np.tile(freqs - width / 2, (2, 1)))
+        ds["frequency2"] = (["time", "frequency"], np.tile(freqs + width / 2, (2, 1)))
+    return ds
+
+
+@pytest.mark.parametrize("with_bounds", [True, False])
+def test_spectral_integrated_parameters(with_bounds):
+    """Hs, Tm02 and Tm0,-1 from the frequency moments of efth."""
+    ds = _single_bin_spectrum(with_bounds=with_bounds)
+    out = spectral_integrated_parameters(ds)
+    assert set(out) == {"hs_spec", "tm02_spec", "tm0m1_spec"}
+    df = 0.06 if with_bounds else 0.075  # bin width of f=0.1 (edges 0.075-0.15)
+    m0 = 2.0 * 2 * np.pi * df
+    np.testing.assert_allclose(out["hs_spec"][0], 4 * np.sqrt(m0), rtol=1e-5)
+    # one frequency only: both mean periods equal 1 / f0
+    np.testing.assert_allclose(out["tm02_spec"][0], 10.0, rtol=1e-5)
+    np.testing.assert_allclose(out["tm0m1_spec"][0], 10.0, rtol=1e-5)
+    # empty spectrum -> NaN, on the track dimension, with CF attributes
+    assert all(np.isnan(out[k][1]) for k in out)
+    assert out["hs_spec"].dims == ("time",)
+    assert out["tm02_spec"].attrs["units"] == "s"
+    assert "standard_name" in out["tm0m1_spec"].attrs
+
+
+def test_spectral_integrated_parameters_without_efth():
+    """No spectrum variable: nothing computed."""
+    assert spectral_integrated_parameters(xr.Dataset()) == {}
+
+
+def test_load_ww3_adds_spectral_parameters(tmp_path, monkeypatch):
+    """load_ww3 adds the spectral parameters to the WW3 track dataset."""
+    ds = _single_bin_spectrum()
+    ds["longitude"] = ("time", [0.0, 1.0])
+    ds["latitude"] = ("time", [0.0, 1.0])
+    monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: ds)
+    out, field_vars = load_ww3(
+        tmp_path / "ww3.nc", datetime(2022, 1, 7, tzinfo=timezone.utc), _CFG_V02
+    )
+    assert field_vars == []
+    assert {"hs_spec", "tm02_spec", "tm0m1_spec"} <= set(out.data_vars)

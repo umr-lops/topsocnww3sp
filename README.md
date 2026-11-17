@@ -48,9 +48,10 @@ on the scientific use case.
 - **Multi-grid WW3 support**: Handles IRI configuration with Arctic, Antarctic
   and mid-latitude grids
 
-- **WW3 integrated parameters**: Samples total (and, when available,
-  partitioned) SWH, Tm2 and Tm01 from the WW3 FIELD files, attaching one value
-  per spectrum on the same dimension as the spectra
+- **WW3 integrated parameters**: one value per spectrum, on the same dimension
+  as the spectra: Hs, Tm02 and Tm0,-1 integrated from each spectrum (`hs_spec`,
+  `tm02_spec`, `tm0m1_spec`), plus `hs` and the sea ice fraction `ice` sampled
+  from the WW3 FIELD files
 
 - **CF-compliant NetCDF output**: L2C products with full metadata and provenance
   tracking
@@ -124,9 +125,18 @@ ww3_field_grids:
 ww3_field_variables:
   hs:
     attrs:
-      long_name: "WW3 significant height of wind and swell waves (total SWH)"
+      long_name:
+        "WW3 significant height of wind and swell waves (total SWH), from the
+        FIELD files"
       units: "m"
       standard_name: "sea_surface_wave_significant_height"
+  ice:
+    attrs:
+      long_name: "WW3 sea ice area fraction (forcing), from the FIELD files"
+      units: "1"
+      standard_name: "sea_ice_area_fraction"
+# No wave period in the IRI FIELD files: Tm02 and Tm0,-1 are integrated from
+# the spectra (hs_spec, tm02_spec, tm0m1_spec), no configuration needed.
 ```
 
 ## Usage
@@ -173,9 +183,9 @@ Each output NetCDF file contains:
 - `intraburst` group: Original SAR OSW intraburst data (same group name as in
   the ESA OSW file)
 - `interburst` group: Original SAR OSW interburst data
-- `WW3` group: Filtered WW3 spectra (lasso mode), including the WW3 integrated
-  parameters (e.g. `hs`) sampled from the FIELD files on the same `sample`
-  dimension as the spectra
+- `WW3` group: Filtered WW3 spectra (lasso mode) and, on the same `sample`
+  dimension, their integrated parameters: `hs_spec`, `tm02_spec`, `tm0m1_spec`
+  (from the spectra), `hs` and `ice` (from the FIELD files)
 - `MATCH_MAP` group: Association table (other modes)
 
 ## Visualization Tools
