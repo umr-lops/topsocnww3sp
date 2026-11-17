@@ -24,8 +24,8 @@ Example snippet for visualization:
     import cartopy.crs as ccrs
 
     # Load data
-    ds_sar = xr.open_dataset("product_v0.1.nc", group="SAR_intraburst")
-    ds_ww3 = xr.open_dataset("product_v0.1.nc", group="WW3")
+    ds_sar = xr.open_dataset("product_v0.2.nc", group="intraburst")
+    ds_ww3 = xr.open_dataset("product_v0.2.nc", group="WW3")
 
     # Plotting map
     fig = plt.figure(figsize=(10, 6))

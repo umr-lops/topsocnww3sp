@@ -54,6 +54,104 @@ def haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     return 2 * np.arcsin(np.sqrt(a)) * 6371
 
 
+def spherical_centroid(lon: np.ndarray, lat: np.ndarray) -> tuple[float, float]:
+    """Centroid (lon, lat in degrees) of points, robust to the date line and poles.
+
+    Args:
+        lon: Longitudes in degrees
+        lat: Latitudes in degrees
+
+    Returns:
+        (lon0, lat0) of the normalised mean of the 3D unit vectors
+    """
+    lam = np.radians(np.asarray(lon, dtype="f8"))
+    phi = np.radians(np.asarray(lat, dtype="f8"))
+    x = np.mean(np.cos(phi) * np.cos(lam))
+    y = np.mean(np.cos(phi) * np.sin(lam))
+    z = np.mean(np.sin(phi))
+    return float(np.degrees(np.arctan2(y, x))), float(
+        np.degrees(np.arctan2(z, np.hypot(x, y)))
+    )
+
+
+def gnomonic_projection(
+    lon: np.ndarray, lat: np.ndarray, lon0: float, lat0: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Gnomonic projection of points on the plane tangent at (lon0, lat0).
+
+    Great circles map to straight lines, so the planar convex hull of
+    projected points is their spherical convex hull. This keeps the lasso
+    footprint compact across the +/-180 meridian and near the poles, where a
+    hull built in raw lon/lat spans the whole globe. Coordinates are in units
+    of the Earth radius (~radians close to the tangent point); points 90
+    degrees or more away from the tangent point get NaN.
+
+    Args:
+        lon: Longitudes in degrees
+        lat: Latitudes in degrees
+        lon0: Tangent point longitude in degrees
+        lat0: Tangent point latitude in degrees
+
+    Returns:
+        (x, y) projected coordinates
+    """
+    lam = np.radians(np.asarray(lon, dtype="f8"))
+    phi = np.radians(np.asarray(lat, dtype="f8"))
+    lam0 = np.radians(lon0)
+    phi0 = np.radians(lat0)
+    dlam = lam - lam0
+    cos_c = np.sin(phi0) * np.sin(phi) + np.cos(phi0) * np.cos(phi) * np.cos(dlam)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        inv = np.where(cos_c > 0, 1.0 / cos_c, np.nan)
+    x = np.cos(phi) * np.sin(dlam) * inv
+    y = (np.cos(phi0) * np.sin(phi) - np.sin(phi0) * np.cos(phi) * np.cos(dlam)) * inv
+    return x, y
+
+
+def tidy_ww3_track_dataset(ds: xr.Dataset) -> xr.Dataset:
+    """Remove the WW3 ``track_name`` character array when it carries no data.
+
+    The WW3 track files store ``track_name`` as a ``char(time, string32)``
+    array with a ``string32`` index coordinate; in the IRI runs it is always
+    empty. Writing it back produced an undescriptive ``string32`` dimension
+    (and a spurious ``string1``) in the L2C products (issue #24). The
+    ``string32`` coordinate is always dropped; ``track_name`` is dropped when
+    empty, otherwise it is kept as a plain string variable (no extra dim).
+
+    Args:
+        ds: WW3 track dataset (track dimension first for ``track_name``)
+
+    Returns:
+        Dataset without ``string32``, and without an empty ``track_name``
+    """
+    ds = ds.drop_vars(["string32"], errors="ignore")
+    if "track_name" not in ds.variables:
+        return ds
+    var = ds["track_name"]
+    track_dim = var.dims[0]
+    raw = np.asarray(var.to_numpy())
+    if raw.dtype.kind in "SU" and raw.ndim > 1:
+        # char array (n, nchar[, 1]) -> one string per track point
+        flat = raw.reshape(raw.shape[0], -1).astype("S1")
+        names = np.array([b"".join(row).decode("utf-8", "replace") for row in flat])
+    else:
+        names = np.array(
+            [
+                v.decode("utf-8", "replace") if isinstance(v, bytes) else str(v)
+                for v in raw.ravel()
+            ]
+        )
+    names = np.char.strip(names.astype(str))
+    ds = ds.drop_vars("track_name")
+    if (names != "").any():
+        ds["track_name"] = xr.DataArray(
+            names, dims=track_dim, attrs={"long_name": "track name"}
+        )
+    else:
+        logger.debug("Dropping empty WW3 track_name variable")
+    return ds
+
+
 def format_logs(logger_obj: logging.Logger, level: str) -> logging.Logger:
     """
     Configure the logger with a specific format and level.
@@ -94,6 +192,7 @@ def load_ww3_multi_grid(
     t_thresh = timedelta(minutes=config["TIME_THRESHOLD_MINUTES"])
     t_sar = pd.Timestamp(sar_start).tz_localize(None)
     datasets = []
+    grid_files_ds = []
     grid_names_used = []
 
     # Build flag meaning string once
@@ -118,6 +217,7 @@ def load_ww3_multi_grid(
         ds_grid = xr.open_mfdataset(
             files, combine="nested", concat_dim="time", data_vars="all"
         )
+        grid_files_ds.append(ds_grid)
         ww3_times = pd.to_datetime(ds_grid.time.to_numpy())
 
         # Temporal filter
@@ -147,8 +247,12 @@ def load_ww3_multi_grid(
         error_msg = f"No WW3 data found in {ww3_dir} for time window around {sar_start}"
         raise FileNotFoundError(error_msg)
 
-    # Merge all grids along time dimension
-    ds_merged = xr.concat(datasets, dim="time", join="inner")
+    # Merge all grids along time dimension. The time-filtered subset is small
+    # (a +/- TIME_THRESHOLD_MINUTES window) and is used once per subswath, so
+    # it is loaded in memory once instead of being re-read from disk each time.
+    ds_merged = xr.concat(datasets, dim="time", join="inner").load()
+    for ds_grid in grid_files_ds:
+        ds_grid.close()
     logger.info(
         "Merged %d WW3 grids, total %d time steps",
         len(datasets),

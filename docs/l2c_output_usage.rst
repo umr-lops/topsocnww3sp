@@ -14,9 +14,9 @@ Since the product is stored in NetCDF groups, you can load it using ``xarray``:
 
     import xarray as xr
 
-    ds = xr.open_dataset("path/to/product_v0.1.nc", group="SAR_intraburst")
+    ds = xr.open_dataset("path/to/product_v0.2.nc", group="intraburst")
     # Load the corresponding WW3 data
-    ds_ww3 = xr.open_dataset("path/to/product_v0.1.nc", group="WW3")
+    ds_ww3 = xr.open_dataset("path/to/product_v0.2.nc", group="WW3")
 
 Comparing SAR and Model
 -----------------------

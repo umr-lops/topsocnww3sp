@@ -24,9 +24,16 @@ from topsocnww3sp.l2c_processor import (
     normalize_corner_arrays,
     process_group,
     process_lasso_group,
+    process_safe,
+    read_osw_root_attrs,
+    sar_polarization_from_safe,
     write_output_file,
 )
-from topsocnww3sp.utils import load_ww3_field, load_ww3_multi_grid
+from topsocnww3sp.utils import (
+    load_ww3_field,
+    load_ww3_multi_grid,
+    tidy_ww3_track_dataset,
+)
 
 
 @pytest.fixture
@@ -618,8 +625,10 @@ directory_ww3spectra_output: /fake/path
 
     assert len(saved_paths) == len(osw_paths)
     # No vestigial size-1 subswath dimension in the SAR groups (issue #22)
-    assert "SAR_intraburst" in written_groups
-    assert "subswath" not in written_groups["SAR_intraburst"].dims
+    # SAR groups keep the ESA OSW group names (issue #21)
+    assert {"intraburst", "interburst", "WW3"} <= set(written_groups)
+    assert not any(g.startswith("SAR_") for g in written_groups)
+    assert "subswath" not in written_groups["intraburst"].dims
     for path in saved_paths:
         assert path.name.endswith("_v0.1.nc")
         assert "output" in str(path)
@@ -670,12 +679,12 @@ def test_write_output_file_compresses_large_arrays_only(tmp_path):
     write_output_file(
         out,
         {"title": "t"},
-        [("SAR_intraburst", ds_sar)],
+        [("intraburst", ds_sar)],
         [],
         [("MATCH_MAP_intraburst", ds_match)],
     )
 
-    with xr.open_dataset(out, group="SAR_intraburst") as g:
+    with xr.open_dataset(out, group="intraburst") as g:
         assert g["oswCoh"].encoding.get("zlib") is True
         assert g["oswCoh"].encoding.get("complevel") == _COMPRESSION_LEVEL
         # the small per-tile vector is left uncompressed
@@ -1067,3 +1076,193 @@ directory_ww3spectra_output: /fake/path
     assert "hs" in written["ww3"].variables
     assert written["ww3"]["hs"].dims == ("sample",)
     assert written["ww3"]["hs"].attrs["units"] == "m"
+
+
+# --- E40 feedback for v0.2 (issues #21, #24, #26) and lasso footprint ---
+
+
+def _sar_footprint(
+    lon_min: float, lon_max: float, lat_min: float, lat_max: float, n: int = 4
+) -> xr.Dataset:
+    """Stacked SAR dataset whose tile corners tile a lon/lat box."""
+    lons = np.linspace(lon_min, lon_max, n + 1)
+    lats = np.linspace(lat_min, lat_max, n + 1)
+    lon_c = np.zeros((n, n, 4))
+    lat_c = np.zeros((n, n, 4))
+    for i in range(n):
+        for j in range(n):
+            lon_c[i, j] = [lons[i], lons[i + 1], lons[i + 1], lons[i]]
+            lat_c[i, j] = [lats[j], lats[j], lats[j + 1], lats[j + 1]]
+    lon_c = (lon_c + 180.0) % 360.0 - 180.0
+    ds = xr.Dataset(
+        {
+            "oswLon": (["oswRaSize", "oswAzSize"], lon_c.mean(axis=-1)),
+            "oswLat": (["oswRaSize", "oswAzSize"], lat_c.mean(axis=-1)),
+            "oswLongitudeCorner": (["oswRaSize", "oswAzSize", "oswCellCorner"], lon_c),
+            "oswLatitudeCorner": (["oswRaSize", "oswAzSize", "oswCellCorner"], lat_c),
+        },
+        coords={"oswRaSize": np.arange(n), "oswAzSize": np.arange(n)},
+    )
+    return ds.stack(tiles=["oswRaSize", "oswAzSize"])  # noqa: PD013
+
+
+def _ww3_points(lons: list[float], lats: list[float]) -> xr.Dataset:
+    """WW3 track dataset at the given points, all at the SAR time."""
+    n = len(lons)
+    return xr.Dataset(
+        {
+            "efth": (["time", "frequency"], np.ones((n, 2), dtype="f4")),
+            "longitude": (["time"], np.asarray(lons, dtype="f4")),
+            "latitude": (["time"], np.asarray(lats, dtype="f4")),
+        },
+        coords={
+            "time": np.full(n, np.datetime64("2022-01-07T06:25:00", "ns")),
+            "frequency": [0.1, 0.2],
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("box", "inside", "outside"),
+    [
+        # footprint crossing the +/-180 meridian
+        (
+            (178.0, 182.0, -60.0, -58.0),
+            [(179.5, -59.0), (-179.5, -59.0)],
+            [(0.0, -59.0), (90.0, -59.0), (-90.0, -59.0)],
+        ),
+        # footprint near the north pole, spanning many longitudes
+        (
+            (0.0, 120.0, 87.0, 88.0),
+            [(60.0, 87.8)],
+            [(-120.0, 87.5), (180.0, 87.2), (60.0, 80.0)],
+        ),
+    ],
+)
+def test_process_lasso_group_dateline_and_pole(mock_config, box, inside, outside):
+    """The lasso footprint stays local across the date line and near the pole."""
+    sar = _sar_footprint(*box)
+    pts = inside + outside
+    ww3 = _ww3_points([p[0] for p in pts], [p[1] for p in pts])
+    sar_start = datetime(2022, 1, 7, 6, 25, tzinfo=timezone.utc)
+    out = process_lasso_group(
+        Path("x.nc"), ww3, "intraburst", mock_config, sar_start, fat_osw=sar
+    )
+    assert out is not None
+    got = sorted(
+        zip(
+            out.longitude.to_numpy().round(1),
+            out.latitude.to_numpy().round(1),
+            strict=True,
+        )
+    )
+    assert got == sorted((round(lo, 1), round(la, 1)) for lo, la in inside)
+
+
+def test_tidy_ww3_track_dataset_drops_empty_track_name():
+    """An all-empty WW3 track_name and its string32 coordinate are removed (#24)."""
+    ds = _ww3_points([0.0, 1.0], [0.0, 1.0])
+    ds["track_name"] = (["time", "string32"], np.full((2, 32), b"", dtype="S1"))
+    ds = ds.assign_coords(string32=np.arange(32, dtype="i4"))
+    out = tidy_ww3_track_dataset(ds)
+    assert "track_name" not in out.variables
+    assert "string32" not in out.dims
+    assert "string32" not in out.variables
+
+
+def test_tidy_ww3_track_dataset_keeps_named_tracks(tmp_path):
+    """A non-empty track_name is kept as strings, without a char dimension."""
+    ds = _ww3_points([0.0, 1.0], [0.0, 1.0])
+    chars = np.full((2, 32), b"", dtype="S1")
+    chars[0, :3] = [b"a", b"b", b"c"]
+    ds["track_name"] = (["time", "string32"], chars)
+    out = tidy_ww3_track_dataset(ds)
+    assert out["track_name"].dims == ("time",)
+    assert list(out["track_name"].to_numpy()) == ["abc", ""]
+    out.to_netcdf(tmp_path / "t.nc")
+    with xr.open_dataset(tmp_path / "t.nc") as back:
+        assert set(back.dims) == {"time", "frequency"}
+
+
+def test_sar_polarization_from_safe():
+    """The SAFE product type gives the polarization code (#26)."""
+    safe = "S1C_IW_OCN__2SDV_20260331T184840_20260331T184905_007012_00E32C_D16D.SAFE"
+    assert sar_polarization_from_safe(safe) == "DV"
+    assert sar_polarization_from_safe(safe.replace("2SDV", "2SSH")) == "SH"
+    assert sar_polarization_from_safe("foo.SAFE") is None
+
+
+def test_create_global_attributes_e40_feedback():
+    """IPF version, product_id and polarization attributes (#26)."""
+    attrs = create_global_attributes(
+        "s1c-iw2-osw-vv-20260331t184836-20260331t184907-007012-00e32c-002.nc",
+        "v0.2",
+        "lasso",
+        safe_name="S1C_IW_OCN__2SDV_20260331T184840_20260331T184905_007012_00E32C_D16D.SAFE",
+        osw_attrs={
+            "IPFversion": "004.11",
+            "polarisation": "VV",
+            "sourceProduct": "S1C_IW_SL2.SAFE",
+        },
+    )
+    assert attrs["sar_polarization"] == "DV"
+    assert attrs["sar_osw_polarization"] == "VV"
+    assert attrs["sar_ipf_version"] == "004.11"
+    assert attrs["sar_source_product"] == "S1C_IW_SL2.SAFE"
+    assert attrs["product_version"] == "v0.2"
+    expected_id = (
+        "s1c-iw2-osw-vv-20260331t184836-20260331t184907-007012-00e32c-002_v0.2"
+    )
+    assert attrs["product_id"] == expected_id
+    assert attrs["id"] == expected_id
+    assert "product_id_description" in attrs
+    assert "OSW OSW" not in attrs["summary"]
+    assert " VV " in attrs["title"]
+
+
+def test_create_global_attributes_without_safe_or_osw_attrs():
+    """Without SAFE name the OSW file polarization is used; IPF is 'unknown'."""
+    attrs = create_global_attributes(
+        "s1a-iw1-osw-hh-20220107t062429-20220107t062500-041351-04ea80-001.nc",
+        "v0.2",
+        "lasso",
+    )
+    assert attrs["sar_polarization"] == "HH"
+    assert attrs["sar_ipf_version"] == "unknown"
+    assert "sar_safe" not in attrs
+
+
+def test_read_osw_root_attrs(tmp_path):
+    """Root attributes of an OSW file are read; a missing file gives {}."""
+    path = tmp_path / "osw.nc"
+    xr.Dataset(attrs={"IPFversion": "004.11"}).to_netcdf(path)
+    assert read_osw_root_attrs(path)["IPFversion"] == "004.11"
+    assert read_osw_root_attrs(tmp_path / "missing.nc") == {}
+
+
+def test_process_safe_land_subswath_does_not_stop_others(
+    mock_safe_directory,
+    dummy_ww3_ds_sparse,
+    dummy_sar_ds_with_corners,
+    tmp_path,
+    monkeypatch,
+):
+    """A land-only subswath (read_osw -> None) is skipped, the others are written."""
+    safe_dir, _ = mock_safe_directory
+
+    def fake_read_osw(_group, files):
+        return (
+            (None, {}) if "-iw1-" in files[0].name else (dummy_sar_ds_with_corners, {})
+        )
+
+    monkeypatch.setattr("topsocnww3sp.l2c_processor.read_osw", fake_read_osw)
+    monkeypatch.setattr(xarray, "open_dataset", lambda *_, **__: dummy_ww3_ds_sparse)
+    written = process_safe(
+        safe_dir,
+        {"product_version": "v0.2", "TIME_THRESHOLD_MINUTES": 30, "BUFFER_DEG": 0.1},
+        tmp_path / "out",
+        ww3_path=tmp_path / "ww3.nc",
+    )
+    assert sorted(p.name.split("-")[1] for p in written) == ["iw2", "iw3"]
+    for path in written:
+        assert path.name.endswith("_v0.2.nc")

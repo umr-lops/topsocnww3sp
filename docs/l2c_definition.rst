@@ -16,7 +16,7 @@ L2C Output Structure
 
 The output files use NetCDF groups to separate different types of information:
 
-* **SAR Groups**: Contain the original OSW data (e.g., ``SAR_intraburst``, ``SAR_interburst``).
+* **SAR Groups**: Contain the original OSW data (``intraburst``, ``interburst``: same names as in the ESA OSW files).
 * **WW3 Group**: Contains the associated WW3 spectra. The group name depends on the mode:
     * In ``lasso`` mode, it is simply named ``WW3``.
     * In other modes, it is often prefixed by the SAR group (e.g., ``WW3_intraburst``).
@@ -67,7 +67,7 @@ The output files are named following this pattern:
 
 ``<original_osw_stem>_<product_version>.nc``
 
-Example: ``s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001_v0.1.nc``
+Example: ``s1a-iw1-osw-vv-20220107t062429-20220107t062500-041351-04ea80-001_v0.2.nc``
 
 The files are organized in a hierarchical directory structure:
 ``<output_dir>/<year>/<month>/<day>/<safe_name>/<filename>.nc``

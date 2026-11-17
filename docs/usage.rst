@@ -39,7 +39,7 @@ The YAML config file should contain at least the following keys:
     directory_ww3spectra_output: /path/to/ww3/data
     TIME_THRESHOLD_MINUTES: 30
     DISTANCE_THRESHOLD_KM: 14
-    product_version: v0.1
+    product_version: v0.2
 
     # WW3 FIELD (integrated parameters) configuration. Keys must match the
     # ww3_grids keys so each track point is sampled from its own grid.
