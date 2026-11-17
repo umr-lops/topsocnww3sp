@@ -2,7 +2,7 @@ name: topsocnww3sp
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
+  - python=3.12
   - xarray
   - netcdf4
   - tqdm
@@ -13,3 +13,4 @@ dependencies:
   - cartopy
   - scipy
   - dask
+  - shapely>=2

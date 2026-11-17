@@ -16,7 +16,6 @@ From: ubuntu:22.04
 
 %post
     export MAMBA_ROOT_PREFIX=/opt/conda
-    export MAMBA_VERSION=1.5.6
     export ENV_NAME=topsocnww3sp
 
     # Throttling to prevent memory errors
@@ -29,15 +28,18 @@ From: ubuntu:22.04
 
     # 2. Micromamba
     mkdir -p /usr/local/bin
-    curl -L https://micromamba.snakepit.net/api/micromamba/linux-64/${MAMBA_VERSION} | \
-    tar -xvj --strip-components=1 -C /usr/local/bin/ bin/micromamba
+    curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest | \
+    tar -xj --strip-components=1 -C /usr/local/bin/ bin/micromamba
 
     # 3. Environment creation
     micromamba create -y -r $MAMBA_ROOT_PREFIX -n $ENV_NAME -f /opt/environment.yml --quiet
 
-    # 4. Install the local application (generates the scripts from pyproject.toml)
+    # 4. Install the local application (generates the scripts from pyproject.toml).
+    # Dependencies come from environment.yml (conda-forge) only: --no-deps.
+    # hatch-vcs reads the version from git: the copied repo belongs to another uid.
+    git config --global --add safe.directory /opt/app_src
     cd /opt/app_src
-    /opt/conda/envs/$ENV_NAME/bin/pip install .
+    /opt/conda/envs/$ENV_NAME/bin/pip install --no-deps --no-cache-dir .
 
     # 5. Final permissions
     chmod -R 755 /opt/conda
@@ -48,7 +50,7 @@ From: ubuntu:22.04
     apt-get purge -y curl bzip2 build-essential
     apt-get autoremove -y
     apt-get clean
-    rm -rf /var/lib/apt/lists/* /opt/environment.yml
+    rm -rf /var/lib/apt/lists/* /opt/environment.yml /root/.cache
 
 %runscript
     if [ $# -eq 0 ]; then
@@ -61,3 +63,5 @@ From: ubuntu:22.04
 %test
     which procl2c
     which procl2c-sequential
+    python -c "import topsocnww3sp, shapely, netCDF4, xarray, dask, cartopy; print('topsocnww3sp', topsocnww3sp.__version__)"
+    procl2c-sequential --help > /dev/null
