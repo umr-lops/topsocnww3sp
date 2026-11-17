@@ -13,6 +13,8 @@ From: ubuntu:22.04
     export ENV_NAME=topsocnww3sp
     export PATH=/opt/conda/envs/topsocnww3sp/bin:/opt/conda/bin:$PATH
     export PYTHONUNBUFFERED=1
+    # never import packages from the host ~/.local (home is bind-mounted)
+    export PYTHONNOUSERSITE=1
 
 %post
     export MAMBA_ROOT_PREFIX=/opt/conda
